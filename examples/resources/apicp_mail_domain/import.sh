@@ -1,0 +1,1 @@
+terraform import apicp_mail_domain.example mdom_abc123

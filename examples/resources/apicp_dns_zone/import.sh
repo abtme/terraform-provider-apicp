@@ -1,0 +1,1 @@
+terraform import apicp_dns_zone.example dz_abc123

@@ -1,0 +1,1 @@
+terraform import apicp_tls_certificate.example vh_abc123

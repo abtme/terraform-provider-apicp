@@ -1,0 +1,1 @@
+terraform import apicp_mailbox.info mdom_abc123/mbox_xyz789
