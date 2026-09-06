@@ -1,0 +1,1 @@
+terraform import apicp_cron_job.backup vh_abc123/cronjob_xyz789
