@@ -88,3 +88,38 @@ func (c *Client) GetCertificate(vhostID string) (*Certificate, error) {
 func (c *Client) DeleteCertificate(vhostID string) error {
 	return c.Delete(fmt.Sprintf("/v1/vhosts/%s/certificate", vhostID))
 }
+
+// SSHAccess mirrors apicp's internal/sshaccess.SSHAccess JSON shape.
+type SSHAccess struct {
+	ID        string `json:"id"`
+	VhostID   string `json:"vhost_id"`
+	UnixUser  string `json:"unix_user"`
+	PublicKey string `json:"public_key"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+}
+
+type sshAccessCreateRequest struct {
+	PublicKey string `json:"public_key"`
+}
+
+// EnableSSHAccess implements POST /v1/vhosts/{id}/ssh-access.
+func (c *Client) EnableSSHAccess(vhostID, publicKey string) (*SSHAccess, error) {
+	var a SSHAccess
+	if err := c.Post(fmt.Sprintf("/v1/vhosts/%s/ssh-access", vhostID), sshAccessCreateRequest{PublicKey: publicKey}, &a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (c *Client) GetSSHAccess(vhostID string) (*SSHAccess, error) {
+	var a SSHAccess
+	if err := c.Get(fmt.Sprintf("/v1/vhosts/%s/ssh-access", vhostID), &a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (c *Client) DisableSSHAccess(vhostID string) error {
+	return c.Delete(fmt.Sprintf("/v1/vhosts/%s/ssh-access", vhostID))
+}
