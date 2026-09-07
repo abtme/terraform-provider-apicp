@@ -31,12 +31,18 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-// New creates a new apicp API client.
+// New creates a new apicp API client. Timeout is 6 minutes, not 60s -
+// apicpd's own request timeout is 5 minutes (PLAN.md §8 phase 6:
+// DKIM/antispam/antivirus reconciles serialize against each other
+// server-side to avoid concurrent apt-get/dpkg collisions, so several
+// independent resources applied together can legitimately queue behind
+// each other, each itself taking real package-install time) - the
+// client timeout must stay comfortably above that, not below it.
 func New(baseURL, token string) *Client {
 	return &Client{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		Token:      token,
-		HTTPClient: &http.Client{Timeout: 60 * time.Second},
+		HTTPClient: &http.Client{Timeout: 6 * time.Minute},
 	}
 }
 
