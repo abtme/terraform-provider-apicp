@@ -108,6 +108,7 @@ func (p *ApicpProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewPackageResource,
 		NewPHPMyAdminResource,
 		NewPHPPgAdminResource,
+		NewWebmailResource,
 	}
 }
 
