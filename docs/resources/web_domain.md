@@ -25,6 +25,10 @@ resource "apicp_web_domain" "example" {
 
 - `domain` (String) Domain name, e.g. `example.com`. Changing this renames the vhost in place (apicp removes the old nginx config and reapplies under the new domain) rather than replacing the resource.
 
+### Optional
+
+- `php_version` (String) PHP-FPM version to serve this domain with: `5.6`, `7.2`, `7.4`, `8.0`, `8.1`, `8.2`, `8.3`, or `8.4`. Omit (or set to `""`) for static content only, the default — apicp never installs a PHP version itself, a domain can only select one already provisioned on its node.
+
 ### Read-Only
 
 - `document_root` (String) Filesystem path apicp serves this domain from.

@@ -14,19 +14,25 @@ type Vhost struct {
 	TLSEnabled   bool   `json:"tls_enabled"`
 	TLSCertPath  string `json:"tls_cert_path,omitempty"`
 	TLSKeyPath   string `json:"tls_key_path,omitempty"`
+	// PHPVersion is "" for a static (no PHP-FPM) vhost, or one of
+	// apicp's PLAN.md §8 phase 2 supported versions (see the provider's
+	// own php_version schema description for the current list).
+	PHPVersion string `json:"php_version,omitempty"`
 }
 
 type vhostCreateRequest struct {
-	Domain string `json:"domain"`
+	Domain     string `json:"domain"`
+	PHPVersion string `json:"php_version,omitempty"`
 }
 
 type vhostPatchRequest struct {
-	Domain *string `json:"domain,omitempty"`
+	Domain     *string `json:"domain,omitempty"`
+	PHPVersion *string `json:"php_version,omitempty"`
 }
 
-func (c *Client) CreateVhost(domain string) (*Vhost, error) {
+func (c *Client) CreateVhost(domain, phpVersion string) (*Vhost, error) {
 	var v Vhost
-	if err := c.Post("/v1/vhosts", vhostCreateRequest{Domain: domain}, &v); err != nil {
+	if err := c.Post("/v1/vhosts", vhostCreateRequest{Domain: domain, PHPVersion: phpVersion}, &v); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -40,12 +46,15 @@ func (c *Client) GetVhost(id string) (*Vhost, error) {
 	return &v, nil
 }
 
-// RenameVhost changes a vhost's domain — apicpd handles this as
-// remove-then-reapply under the new domain, but the vhost's own ID and
-// every other attribute stay the same.
-func (c *Client) RenameVhost(id, newDomain string) (*Vhost, error) {
+// PatchVhost updates domain and/or php_version - apicpd handles a domain
+// change as remove-then-reapply under the new domain, but the vhost's own
+// ID and every other attribute stay the same. Both fields are always sent
+// (never nil) since the resource always has a resolved plan value for
+// each by the time Update runs; PATCH is idempotent, so re-sending an
+// unchanged value is a no-op.
+func (c *Client) PatchVhost(id, domain, phpVersion string) (*Vhost, error) {
 	var v Vhost
-	if err := c.Patch("/v1/vhosts/"+id, vhostPatchRequest{Domain: &newDomain}, &v); err != nil {
+	if err := c.Patch("/v1/vhosts/"+id, vhostPatchRequest{Domain: &domain, PHPVersion: &phpVersion}, &v); err != nil {
 		return nil, err
 	}
 	return &v, nil

@@ -30,6 +30,7 @@ type WebDomainResourceModel struct {
 	UnixUser     types.String `tfsdk:"unix_user"`
 	Status       types.String `tfsdk:"status"`
 	TLSEnabled   types.Bool   `tfsdk:"tls_enabled"`
+	PHPVersion   types.String `tfsdk:"php_version"`
 }
 
 func (r *WebDomainResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -68,6 +69,11 @@ func (r *WebDomainResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Computed:            true,
 				MarkdownDescription: "Whether a TLS certificate is currently installed — managed via `apicp_tls_certificate`, not directly on this resource.",
 			},
+			"php_version": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "PHP-FPM version to serve this domain with: `5.6`, `7.2`, `7.4`, `8.0`, `8.1`, `8.2`, `8.3`, or `8.4`. Omit (or set to `\"\"`) for static content only, the default — apicp never installs a PHP version itself, a domain can only select one already provisioned on its node.",
+			},
 		},
 	}
 }
@@ -92,6 +98,7 @@ func (r *WebDomainResource) applyVhost(v *client.Vhost, m *WebDomainResourceMode
 	m.UnixUser = types.StringValue(v.UnixUser)
 	m.Status = types.StringValue(v.Status)
 	m.TLSEnabled = types.BoolValue(v.TLSEnabled)
+	m.PHPVersion = types.StringValue(v.PHPVersion)
 }
 
 func (r *WebDomainResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -101,7 +108,7 @@ func (r *WebDomainResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	v, err := r.client.CreateVhost(plan.Domain.ValueString())
+	v, err := r.client.CreateVhost(plan.Domain.ValueString(), plan.PHPVersion.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating web domain", err.Error())
 		return
@@ -138,9 +145,9 @@ func (r *WebDomainResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	v, err := r.client.RenameVhost(state.ID.ValueString(), plan.Domain.ValueString())
+	v, err := r.client.PatchVhost(state.ID.ValueString(), plan.Domain.ValueString(), plan.PHPVersion.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Error renaming web domain", err.Error())
+		resp.Diagnostics.AddError("Error updating web domain", err.Error())
 		return
 	}
 	r.applyVhost(v, &plan)
