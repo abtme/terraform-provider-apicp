@@ -151,6 +151,14 @@ func (c *Client) Patch(path string, body, target any) error {
 	return c.request(http.MethodPatch, path, nil, body, target)
 }
 
+// Put performs a PUT with a JSON body and decodes the response into
+// target - apicp's whole-resource-replace endpoints (e.g. the system
+// backup config toggle, PLAN.md §8 phase 5) use PUT rather than PATCH
+// since there's exactly one settable shape, not a partial update.
+func (c *Client) Put(path string, body, target any) error {
+	return c.request(http.MethodPut, path, nil, body, target)
+}
+
 // Delete performs a DELETE. apicp's delete endpoints return 204 with no body.
 func (c *Client) Delete(path string) error {
 	return c.request(http.MethodDelete, path, nil, nil, nil)
