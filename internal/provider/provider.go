@@ -104,6 +104,8 @@ func (p *ApicpProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewMailboxResource,
 		NewSSHAccessResource,
 		NewCronJobResource,
+		NewAccountResource,
+		NewPackageResource,
 	}
 }
 
