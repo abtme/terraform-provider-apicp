@@ -113,6 +113,8 @@ func (p *ApicpProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewDKIMResource,
 		NewAntispamResource,
 		NewAntivirusResource,
+		NewFirewallResource,
+		NewFirewallRuleResource,
 	}
 }
 
