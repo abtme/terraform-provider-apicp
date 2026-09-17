@@ -169,3 +169,10 @@ func (c *Client) Put(path string, body, target any) error {
 func (c *Client) Delete(path string) error {
 	return c.request(http.MethodDelete, path, nil, nil, nil)
 }
+
+// DeleteWithBody performs a DELETE with a JSON body - for the few
+// endpoints (e.g. ssh-access) where DELETE takes an optional body
+// narrowing what gets removed, rather than always deleting everything.
+func (c *Client) DeleteWithBody(path string, body any) error {
+	return c.request(http.MethodDelete, path, nil, body, nil)
+}

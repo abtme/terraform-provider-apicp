@@ -99,23 +99,29 @@ func (c *Client) DeleteCertificate(vhostID string) error {
 }
 
 // SSHAccess mirrors apicp's internal/sshaccess.SSHAccess JSON shape.
+// PublicKeys is the *complete* set of keys currently authorized on the
+// vhost — several apicp_ssh_access resources against the same vhost_id
+// each grant their own key and all show up here together, not just the
+// one a particular resource added.
 type SSHAccess struct {
-	ID        string `json:"id"`
-	VhostID   string `json:"vhost_id"`
-	UnixUser  string `json:"unix_user"`
-	PublicKey string `json:"public_key"`
-	Status    string `json:"status"`
-	Error     string `json:"error,omitempty"`
+	ID         string   `json:"id"`
+	VhostID    string   `json:"vhost_id"`
+	UnixUser   string   `json:"unix_user"`
+	PublicKeys []string `json:"public_keys"`
+	Status     string   `json:"status"`
+	Error      string   `json:"error,omitempty"`
 }
 
-type sshAccessCreateRequest struct {
-	PublicKey string `json:"public_key"`
+type sshAccessRequest struct {
+	PublicKey string `json:"public_key,omitempty"`
 }
 
-// EnableSSHAccess implements POST /v1/vhosts/{id}/ssh-access.
+// EnableSSHAccess implements POST /v1/vhosts/{id}/ssh-access — additive:
+// adds publicKey to whatever set is already authorized (a no-op if it's
+// already present), returning the complete resulting set.
 func (c *Client) EnableSSHAccess(vhostID, publicKey string) (*SSHAccess, error) {
 	var a SSHAccess
-	if err := c.Post(fmt.Sprintf("/v1/vhosts/%s/ssh-access", vhostID), sshAccessCreateRequest{PublicKey: publicKey}, &a); err != nil {
+	if err := c.Post(fmt.Sprintf("/v1/vhosts/%s/ssh-access", vhostID), sshAccessRequest{PublicKey: publicKey}, &a); err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -129,6 +135,14 @@ func (c *Client) GetSSHAccess(vhostID string) (*SSHAccess, error) {
 	return &a, nil
 }
 
+// DisableSSHAccessKey revokes just publicKey, leaving any other keys
+// granted on the vhost active (if publicKey was the last one, apicp
+// falls through to a full revoke on its side).
+func (c *Client) DisableSSHAccessKey(vhostID, publicKey string) error {
+	return c.DeleteWithBody(fmt.Sprintf("/v1/vhosts/%s/ssh-access", vhostID), sshAccessRequest{PublicKey: publicKey})
+}
+
+// DisableSSHAccess revokes every key on the vhost.
 func (c *Client) DisableSSHAccess(vhostID string) error {
 	return c.Delete(fmt.Sprintf("/v1/vhosts/%s/ssh-access", vhostID))
 }
