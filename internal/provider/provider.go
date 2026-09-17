@@ -115,9 +115,13 @@ func (p *ApicpProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewAntivirusResource,
 		NewFirewallResource,
 		NewFirewallRuleResource,
+		NewSMTPRelayResource,
+		NewTOTPResource,
 	}
 }
 
 func (p *ApicpProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return []func() datasource.DataSource{
+		NewAccountStatsDataSource,
+	}
 }
