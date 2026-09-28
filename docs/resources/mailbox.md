@@ -36,6 +36,11 @@ output "info_mailbox_password" {
 - `local_part` (String) Local part of the email address (before the `@`). Changing this replaces the resource.
 - `mail_domain_id` (String) ID of the `apicp_mail_domain` this mailbox belongs to. Changing this replaces the resource.
 
+### Optional
+
+- `disable_imap` (Boolean) Switch IMAP off for this mailbox (webmail uses IMAP, so it stops too). Also off if the mail domain's `disable_imap` is set. Mail is still delivered. Default `false`.
+- `disable_pop3` (Boolean) Switch POP3 off for this mailbox. Also off if the mail domain's `disable_pop3` is set. Mail is still delivered. Default `false`.
+
 ### Read-Only
 
 - `email` (String)

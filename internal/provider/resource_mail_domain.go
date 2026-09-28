@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -23,10 +24,16 @@ func NewMailDomainResource() resource.Resource { return &MailDomainResource{} }
 type MailDomainResource struct{ client *client.Client }
 
 type MailDomainResourceModel struct {
-	ID       types.String `tfsdk:"id"`
-	Name     types.String `tfsdk:"name"`
-	UnixUser types.String `tfsdk:"unix_user"`
-	Status   types.String `tfsdk:"status"`
+	ID          types.String `tfsdk:"id"`
+	Name        types.String `tfsdk:"name"`
+	UnixUser    types.String `tfsdk:"unix_user"`
+	DisableIMAP types.Bool   `tfsdk:"disable_imap"`
+	DisablePOP3 types.Bool   `tfsdk:"disable_pop3"`
+	Status      types.String `tfsdk:"status"`
+}
+
+func (m *MailDomainResourceModel) protocols() client.Protocols {
+	return client.Protocols{DisableIMAP: m.DisableIMAP.ValueBool(), DisablePOP3: m.DisablePOP3.ValueBool()}
 }
 
 func (r *MailDomainResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -50,6 +57,18 @@ func (r *MailDomainResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Computed:            true,
 				MarkdownDescription: "Dedicated Unix user apicp created for this domain's mailbox storage.",
 			},
+			"disable_imap": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "Switch IMAP off for every mailbox in this domain (logins over IMAP fail; webmail uses IMAP, so it stops too). Mail is still delivered. Default `false`.",
+			},
+			"disable_pop3": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "Switch POP3 off for every mailbox in this domain. Mail is still delivered. Default `false`.",
+			},
 			"status": schema.StringAttribute{Computed: true},
 		},
 	}
@@ -71,6 +90,8 @@ func (r *MailDomainResource) applyDomain(d *client.MailDomain, m *MailDomainReso
 	m.ID = types.StringValue(d.ID)
 	m.Name = types.StringValue(d.Name)
 	m.UnixUser = types.StringValue(d.UnixUser)
+	m.DisableIMAP = types.BoolValue(d.DisableIMAP)
+	m.DisablePOP3 = types.BoolValue(d.DisablePOP3)
 	m.Status = types.StringValue(d.Status)
 }
 
@@ -81,7 +102,7 @@ func (r *MailDomainResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	d, err := r.client.CreateMailDomain(plan.Name.ValueString())
+	d, err := r.client.CreateMailDomain(plan.Name.ValueString(), plan.protocols())
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mail domain", err.Error())
 		return
@@ -110,9 +131,20 @@ func (r *MailDomainResource) Read(ctx context.Context, req resource.ReadRequest,
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
+// Update - name requires replace, so only the protocol switches change here.
 func (r *MailDomainResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan MailDomainResourceModel
+	var plan, state MailDomainResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	d, err := r.client.SetMailDomainProtocols(state.ID.ValueString(), plan.protocols())
+	if err != nil {
+		resp.Diagnostics.AddError("Error updating mail domain", err.Error())
+		return
+	}
+	r.applyDomain(d, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

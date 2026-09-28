@@ -25,6 +25,11 @@ resource "apicp_mail_domain" "example" {
 
 - `name` (String) Mail domain, e.g. `example.com`. Changing this replaces the resource.
 
+### Optional
+
+- `disable_imap` (Boolean) Switch IMAP off for every mailbox in this domain (logins over IMAP fail; webmail uses IMAP, so it stops too). Mail is still delivered. Default `false`.
+- `disable_pop3` (Boolean) Switch POP3 off for every mailbox in this domain. Mail is still delivered. Default `false`.
+
 ### Read-Only
 
 - `id` (String) The ID of this resource.

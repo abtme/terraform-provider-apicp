@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -28,8 +29,14 @@ type MailboxResourceModel struct {
 	MailDomainID types.String `tfsdk:"mail_domain_id"`
 	LocalPart    types.String `tfsdk:"local_part"`
 	Email        types.String `tfsdk:"email"`
+	DisableIMAP  types.Bool   `tfsdk:"disable_imap"`
+	DisablePOP3  types.Bool   `tfsdk:"disable_pop3"`
 	Status       types.String `tfsdk:"status"`
 	Password     types.String `tfsdk:"password"`
+}
+
+func (m *MailboxResourceModel) protocols() client.Protocols {
+	return client.Protocols{DisableIMAP: m.DisableIMAP.ValueBool(), DisablePOP3: m.DisablePOP3.ValueBool()}
 }
 
 func (r *MailboxResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -57,6 +64,18 @@ func (r *MailboxResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"email": schema.StringAttribute{
 				Computed:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
+			"disable_imap": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "Switch IMAP off for this mailbox (webmail uses IMAP, so it stops too). Also off if the mail domain's `disable_imap` is set. Mail is still delivered. Default `false`.",
+			},
+			"disable_pop3": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "Switch POP3 off for this mailbox. Also off if the mail domain's `disable_pop3` is set. Mail is still delivered. Default `false`.",
 			},
 			"status": schema.StringAttribute{Computed: true},
 			"password": schema.StringAttribute{
@@ -89,6 +108,8 @@ func (r *MailboxResource) applyMailbox(mbox *client.Mailbox, m *MailboxResourceM
 	m.MailDomainID = types.StringValue(mbox.MailDomainID)
 	m.LocalPart = types.StringValue(mbox.LocalPart)
 	m.Email = types.StringValue(mbox.Email)
+	m.DisableIMAP = types.BoolValue(mbox.DisableIMAP)
+	m.DisablePOP3 = types.BoolValue(mbox.DisablePOP3)
 	m.Status = types.StringValue(mbox.Status)
 }
 
@@ -99,7 +120,7 @@ func (r *MailboxResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	mbox, err := r.client.CreateMailbox(plan.MailDomainID.ValueString(), plan.LocalPart.ValueString())
+	mbox, err := r.client.CreateMailbox(plan.MailDomainID.ValueString(), plan.LocalPart.ValueString(), plan.protocols())
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mailbox", err.Error())
 		return
@@ -129,11 +150,22 @@ func (r *MailboxResource) Read(ctx context.Context, req resource.ReadRequest, re
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update — every input attribute requires replace, so this never fires in
-// practice; implemented to satisfy the resource.Resource interface.
+// Update - everything else requires replace, so only the protocol switches
+// change here (a switch-only PATCH, which never resets the password).
 func (r *MailboxResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan MailboxResourceModel
+	var plan, state MailboxResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	mbox, err := r.client.SetMailboxProtocols(state.MailDomainID.ValueString(), state.ID.ValueString(), plan.protocols())
+	if err != nil {
+		resp.Diagnostics.AddError("Error updating mailbox", err.Error())
+		return
+	}
+	r.applyMailbox(mbox, &plan)
+	plan.Password = state.Password
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
