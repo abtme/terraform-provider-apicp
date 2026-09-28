@@ -29,16 +29,17 @@ type PackageResource struct{ client *client.Client }
 // nested block, and this provider has no existing precedent for a nested
 // object attribute to follow.
 type PackageResourceModel struct {
-	ID             types.String `tfsdk:"id"`
-	Name           types.String `tfsdk:"name"`
-	OwnerAccountID types.String `tfsdk:"owner_account_id"`
-	ForTier        types.String `tfsdk:"for_tier"`
-	MaxWebDomains  types.Int64  `tfsdk:"max_web_domains"`
-	MaxDatabases   types.Int64  `tfsdk:"max_databases"`
-	MaxMailDomains types.Int64  `tfsdk:"max_mail_domains"`
-	MaxMailboxes   types.Int64  `tfsdk:"max_mailboxes"`
-	MaxCronJobs    types.Int64  `tfsdk:"max_cron_jobs"`
-	MaxSubAccounts types.Int64  `tfsdk:"max_sub_accounts"`
+	ID               types.String `tfsdk:"id"`
+	Name             types.String `tfsdk:"name"`
+	OwnerAccountID   types.String `tfsdk:"owner_account_id"`
+	ForTier          types.String `tfsdk:"for_tier"`
+	MaxWebDomains    types.Int64  `tfsdk:"max_web_domains"`
+	MaxDatabases     types.Int64  `tfsdk:"max_databases"`
+	MaxMailDomains   types.Int64  `tfsdk:"max_mail_domains"`
+	MaxMailboxes     types.Int64  `tfsdk:"max_mailboxes"`
+	MaxCronJobs      types.Int64  `tfsdk:"max_cron_jobs"`
+	MaxSubAccounts   types.Int64  `tfsdk:"max_sub_accounts"`
+	MaxEmailsPerHour types.Int64  `tfsdk:"max_emails_per_hour"`
 }
 
 func (r *PackageResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -47,7 +48,7 @@ func (r *PackageResource) Metadata(_ context.Context, req resource.MetadataReque
 
 func (r *PackageResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages an apicp resource-limit Package, assignable to a reseller or user apicp_account (PLAN.md §8 phase 1). Packages have no update API — apicp only supports create/read/delete, so changing any attribute replaces the resource. A limit left unset defaults to 0, which means 'not allowed', not 'unlimited' — there is no unlimited value.",
+		MarkdownDescription: "Manages an apicp resource-limit Package, assignable to a reseller or user apicp_account (PLAN.md §8 phase 1). Packages have no update API — apicp only supports create/read/delete, so changing any attribute replaces the resource. A limit left unset defaults to 0, which means 'not allowed', not 'unlimited' — the one exception is `max_emails_per_hour`, where 0 is unlimited.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -67,12 +68,13 @@ func (r *PackageResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				MarkdownDescription: "`reseller` or `user` — which account tier this package may be assigned to.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
-			"max_web_domains":  packageLimitAttribute(),
-			"max_databases":    packageLimitAttribute(),
-			"max_mail_domains": packageLimitAttribute(),
-			"max_mailboxes":    packageLimitAttribute(),
-			"max_cron_jobs":    packageLimitAttribute(),
-			"max_sub_accounts": schemaWithDescription(packageLimitAttribute(), "Only meaningful on a for_tier=\"reseller\" package — how many user accounts that reseller may create."),
+			"max_web_domains":     packageLimitAttribute(),
+			"max_databases":       packageLimitAttribute(),
+			"max_mail_domains":    packageLimitAttribute(),
+			"max_mailboxes":       packageLimitAttribute(),
+			"max_cron_jobs":       packageLimitAttribute(),
+			"max_sub_accounts":    schemaWithDescription(packageLimitAttribute(), "Only meaningful on a for_tier=\"reseller\" package — how many user accounts that reseller may create."),
+			"max_emails_per_hour": schemaWithDescription(packageLimitAttribute(), "Outgoing mail (recipients) across everything the account sends, over a rolling hour; mail over it is deferred and retried later, not lost. **Unlike the other limits, `0` (the default) means unlimited.**"),
 		},
 	}
 }
@@ -114,6 +116,7 @@ func (r *PackageResource) applyPackage(p *client.Package, m *PackageResourceMode
 	m.MaxMailboxes = types.Int64Value(int64(p.Limits.MaxMailboxes))
 	m.MaxCronJobs = types.Int64Value(int64(p.Limits.MaxCronJobs))
 	m.MaxSubAccounts = types.Int64Value(int64(p.Limits.MaxSubAccounts))
+	m.MaxEmailsPerHour = types.Int64Value(int64(p.Limits.MaxEmailsPerHour))
 }
 
 func (r *PackageResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -124,12 +127,13 @@ func (r *PackageResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 
 	limits := client.PackageLimits{
-		MaxWebDomains:  int(plan.MaxWebDomains.ValueInt64()),
-		MaxDatabases:   int(plan.MaxDatabases.ValueInt64()),
-		MaxMailDomains: int(plan.MaxMailDomains.ValueInt64()),
-		MaxMailboxes:   int(plan.MaxMailboxes.ValueInt64()),
-		MaxCronJobs:    int(plan.MaxCronJobs.ValueInt64()),
-		MaxSubAccounts: int(plan.MaxSubAccounts.ValueInt64()),
+		MaxWebDomains:    int(plan.MaxWebDomains.ValueInt64()),
+		MaxDatabases:     int(plan.MaxDatabases.ValueInt64()),
+		MaxMailDomains:   int(plan.MaxMailDomains.ValueInt64()),
+		MaxMailboxes:     int(plan.MaxMailboxes.ValueInt64()),
+		MaxCronJobs:      int(plan.MaxCronJobs.ValueInt64()),
+		MaxSubAccounts:   int(plan.MaxSubAccounts.ValueInt64()),
+		MaxEmailsPerHour: int(plan.MaxEmailsPerHour.ValueInt64()),
 	}
 	p, err := r.client.CreatePackage(plan.Name.ValueString(), plan.ForTier.ValueString(), limits)
 	if err != nil {

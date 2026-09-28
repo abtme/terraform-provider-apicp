@@ -12,6 +12,9 @@ type AccountStats struct {
 	Mailboxes   int `json:"mailboxes"`
 	CronJobs    int `json:"cron_jobs"`
 	SubAccounts int `json:"sub_accounts"`
+	// -1 = the mail node's counts couldn't be read
+	EmailsSentLastHour int `json:"emails_sent_last_hour"`
+	MaxEmailsPerHour   int `json:"max_emails_per_hour"`
 }
 
 func (c *Client) GetAccountStats(accountID string) (*AccountStats, error) {

@@ -29,6 +29,7 @@ resource "apicp_mail_domain" "example" {
 
 - `disable_imap` (Boolean) Switch IMAP off for every mailbox in this domain (logins over IMAP fail; webmail uses IMAP, so it stops too). Mail is still delivered. Default `false`.
 - `disable_pop3` (Boolean) Switch POP3 off for every mailbox in this domain. Mail is still delivered. Default `false`.
+- `max_emails_per_hour` (Number) Outgoing mail (recipients) from this domain's mailboxes and its website over a rolling hour, on top of the account's package `max_emails_per_hour`. Mail over it is deferred and retried later, not lost. `0` (default) = unlimited.
 
 ### Read-Only
 

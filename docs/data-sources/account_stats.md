@@ -33,7 +33,9 @@ output "example_web_domains" {
 
 - `cron_jobs` (Number)
 - `databases` (Number)
+- `emails_sent_last_hour` (Number) Recipients sent in the rolling hour the sending limit applies to (`-1` if the mail node's counts couldn't be read).
 - `mail_domains` (Number)
 - `mailboxes` (Number)
+- `max_emails_per_hour` (Number) The account's package sending limit (`0` = unlimited).
 - `sub_accounts` (Number)
 - `web_domains` (Number)

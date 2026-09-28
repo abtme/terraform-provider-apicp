@@ -3,12 +3,12 @@
 page_title: "apicp_package Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
-  Manages an apicp resource-limit Package, assignable to a reseller or user apicp_account (PLAN.md §8 phase 1). Packages have no update API — apicp only supports create/read/delete, so changing any attribute replaces the resource. A limit left unset defaults to 0, which means 'not allowed', not 'unlimited' — there is no unlimited value.
+  Manages an apicp resource-limit Package, assignable to a reseller or user apicp_account (PLAN.md §8 phase 1). Packages have no update API — apicp only supports create/read/delete, so changing any attribute replaces the resource. A limit left unset defaults to 0, which means 'not allowed', not 'unlimited' — the one exception is max_emails_per_hour, where 0 is unlimited.
 ---
 
 # apicp_package (Resource)
 
-Manages an apicp resource-limit Package, assignable to a reseller or user apicp_account (PLAN.md §8 phase 1). Packages have no update API — apicp only supports create/read/delete, so changing any attribute replaces the resource. A limit left unset defaults to 0, which means 'not allowed', not 'unlimited' — there is no unlimited value.
+Manages an apicp resource-limit Package, assignable to a reseller or user apicp_account (PLAN.md §8 phase 1). Packages have no update API — apicp only supports create/read/delete, so changing any attribute replaces the resource. A limit left unset defaults to 0, which means 'not allowed', not 'unlimited' — the one exception is `max_emails_per_hour`, where 0 is unlimited.
 
 ## Example Usage
 
@@ -37,6 +37,7 @@ resource "apicp_package" "starter" {
 
 - `max_cron_jobs` (Number)
 - `max_databases` (Number)
+- `max_emails_per_hour` (Number) Outgoing mail (recipients) across everything the account sends, over a rolling hour; mail over it is deferred and retried later, not lost. **Unlike the other limits, `0` (the default) means unlimited.**
 - `max_mail_domains` (Number)
 - `max_mailboxes` (Number)
 - `max_sub_accounts` (Number) Only meaningful on a for_tier="reseller" package — how many user accounts that reseller may create.

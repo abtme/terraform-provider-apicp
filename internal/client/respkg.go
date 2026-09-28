@@ -9,6 +9,8 @@ type PackageLimits struct {
 	MaxMailboxes   int `json:"max_mailboxes"`
 	MaxCronJobs    int `json:"max_cron_jobs"`
 	MaxSubAccounts int `json:"max_sub_accounts,omitempty"`
+	// Unlike the counts above, 0 = unlimited.
+	MaxEmailsPerHour int `json:"max_emails_per_hour,omitempty"`
 }
 
 // Package mirrors apicp's internal/respkg.Package JSON shape.

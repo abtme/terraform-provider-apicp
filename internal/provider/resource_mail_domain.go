@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -24,12 +25,13 @@ func NewMailDomainResource() resource.Resource { return &MailDomainResource{} }
 type MailDomainResource struct{ client *client.Client }
 
 type MailDomainResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	UnixUser    types.String `tfsdk:"unix_user"`
-	DisableIMAP types.Bool   `tfsdk:"disable_imap"`
-	DisablePOP3 types.Bool   `tfsdk:"disable_pop3"`
-	Status      types.String `tfsdk:"status"`
+	ID               types.String `tfsdk:"id"`
+	Name             types.String `tfsdk:"name"`
+	UnixUser         types.String `tfsdk:"unix_user"`
+	DisableIMAP      types.Bool   `tfsdk:"disable_imap"`
+	DisablePOP3      types.Bool   `tfsdk:"disable_pop3"`
+	MaxEmailsPerHour types.Int64  `tfsdk:"max_emails_per_hour"`
+	Status           types.String `tfsdk:"status"`
 }
 
 func (m *MailDomainResourceModel) protocols() client.Protocols {
@@ -69,6 +71,12 @@ func (r *MailDomainResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Default:             booldefault.StaticBool(false),
 				MarkdownDescription: "Switch POP3 off for every mailbox in this domain. Mail is still delivered. Default `false`.",
 			},
+			"max_emails_per_hour": schema.Int64Attribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             int64default.StaticInt64(0),
+				MarkdownDescription: "Outgoing mail (recipients) from this domain's mailboxes and its website over a rolling hour, on top of the account's package `max_emails_per_hour`. Mail over it is deferred and retried later, not lost. `0` (default) = unlimited.",
+			},
 			"status": schema.StringAttribute{Computed: true},
 		},
 	}
@@ -92,6 +100,7 @@ func (r *MailDomainResource) applyDomain(d *client.MailDomain, m *MailDomainReso
 	m.UnixUser = types.StringValue(d.UnixUser)
 	m.DisableIMAP = types.BoolValue(d.DisableIMAP)
 	m.DisablePOP3 = types.BoolValue(d.DisablePOP3)
+	m.MaxEmailsPerHour = types.Int64Value(int64(d.MaxEmailsPerHour))
 	m.Status = types.StringValue(d.Status)
 }
 
@@ -102,7 +111,7 @@ func (r *MailDomainResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	d, err := r.client.CreateMailDomain(plan.Name.ValueString(), plan.protocols())
+	d, err := r.client.CreateMailDomain(plan.Name.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mail domain", err.Error())
 		return
@@ -131,7 +140,8 @@ func (r *MailDomainResource) Read(ctx context.Context, req resource.ReadRequest,
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update - name requires replace, so only the protocol switches change here.
+// Update - name requires replace, so only the protocol switches and the
+// sending limit change here.
 func (r *MailDomainResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state MailDomainResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -139,7 +149,7 @@ func (r *MailDomainResource) Update(ctx context.Context, req resource.UpdateRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	d, err := r.client.SetMailDomainProtocols(state.ID.ValueString(), plan.protocols())
+	d, err := r.client.UpdateMailDomain(state.ID.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating mail domain", err.Error())
 		return

@@ -23,13 +23,15 @@ var _ datasource.DataSource = &AccountStatsDataSource{}
 func NewAccountStatsDataSource() datasource.DataSource { return &AccountStatsDataSource{} }
 
 type AccountStatsDataSourceModel struct {
-	AccountID   types.String `tfsdk:"account_id"`
-	WebDomains  types.Int64  `tfsdk:"web_domains"`
-	Databases   types.Int64  `tfsdk:"databases"`
-	MailDomains types.Int64  `tfsdk:"mail_domains"`
-	Mailboxes   types.Int64  `tfsdk:"mailboxes"`
-	CronJobs    types.Int64  `tfsdk:"cron_jobs"`
-	SubAccounts types.Int64  `tfsdk:"sub_accounts"`
+	AccountID          types.String `tfsdk:"account_id"`
+	WebDomains         types.Int64  `tfsdk:"web_domains"`
+	Databases          types.Int64  `tfsdk:"databases"`
+	MailDomains        types.Int64  `tfsdk:"mail_domains"`
+	Mailboxes          types.Int64  `tfsdk:"mailboxes"`
+	CronJobs           types.Int64  `tfsdk:"cron_jobs"`
+	SubAccounts        types.Int64  `tfsdk:"sub_accounts"`
+	EmailsSentLastHour types.Int64  `tfsdk:"emails_sent_last_hour"`
+	MaxEmailsPerHour   types.Int64  `tfsdk:"max_emails_per_hour"`
 }
 
 func (d *AccountStatsDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -50,6 +52,10 @@ func (d *AccountStatsDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 			"mailboxes":    schema.Int64Attribute{Computed: true},
 			"cron_jobs":    schema.Int64Attribute{Computed: true},
 			"sub_accounts": schema.Int64Attribute{Computed: true},
+			"emails_sent_last_hour": schema.Int64Attribute{Computed: true,
+				MarkdownDescription: "Recipients sent in the rolling hour the sending limit applies to (`-1` if the mail node's counts couldn't be read)."},
+			"max_emails_per_hour": schema.Int64Attribute{Computed: true,
+				MarkdownDescription: "The account's package sending limit (`0` = unlimited)."},
 		},
 	}
 }
@@ -84,5 +90,7 @@ func (d *AccountStatsDataSource) Read(ctx context.Context, req datasource.ReadRe
 	m.Mailboxes = types.Int64Value(int64(s.Mailboxes))
 	m.CronJobs = types.Int64Value(int64(s.CronJobs))
 	m.SubAccounts = types.Int64Value(int64(s.SubAccounts))
+	m.EmailsSentLastHour = types.Int64Value(int64(s.EmailsSentLastHour))
+	m.MaxEmailsPerHour = types.Int64Value(int64(s.MaxEmailsPerHour))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }

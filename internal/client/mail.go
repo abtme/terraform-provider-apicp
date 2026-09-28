@@ -8,8 +8,9 @@ type MailDomain struct {
 	Name     string `json:"name"`
 	UnixUser string `json:"unix_user"`
 	Protocols
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	MaxEmailsPerHour int    `json:"max_emails_per_hour"`
+	Status           string `json:"status"`
+	Error            string `json:"error,omitempty"`
 }
 
 // Protocols mirrors apicp's mail.Protocols: which login protocols are
@@ -22,20 +23,27 @@ type Protocols struct {
 type mailDomainCreateRequest struct {
 	Name string `json:"name"`
 	Protocols
+	MaxEmailsPerHour int `json:"max_emails_per_hour"`
 }
 
-func (c *Client) CreateMailDomain(name string, p Protocols) (*MailDomain, error) {
+func (c *Client) CreateMailDomain(name string, p Protocols, maxEmailsPerHour int) (*MailDomain, error) {
 	var d MailDomain
-	if err := c.Post("/v1/mail/domains", mailDomainCreateRequest{Name: name, Protocols: p}, &d); err != nil {
+	if err := c.Post("/v1/mail/domains", mailDomainCreateRequest{Name: name, Protocols: p, MaxEmailsPerHour: maxEmailsPerHour}, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
 }
 
-// SetMailDomainProtocols implements PATCH /v1/mail/domains/{id}.
-func (c *Client) SetMailDomainProtocols(id string, p Protocols) (*MailDomain, error) {
+type mailDomainUpdateRequest struct {
+	Protocols
+	MaxEmailsPerHour int `json:"max_emails_per_hour"`
+}
+
+// UpdateMailDomain implements PATCH /v1/mail/domains/{id}, sending every
+// mutable field.
+func (c *Client) UpdateMailDomain(id string, p Protocols, maxEmailsPerHour int) (*MailDomain, error) {
 	var d MailDomain
-	if err := c.Patch("/v1/mail/domains/"+id, p, &d); err != nil {
+	if err := c.Patch("/v1/mail/domains/"+id, mailDomainUpdateRequest{Protocols: p, MaxEmailsPerHour: maxEmailsPerHour}, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
