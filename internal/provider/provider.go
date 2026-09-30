@@ -105,6 +105,7 @@ func (p *ApicpProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewMailForwarderResource,
 		NewMailTLSResource,
 		NewMailClientConfigResource,
+		NewMailDomainTLSResource,
 		NewSystemTLSConfigResource,
 		NewAccountBackupResource,
 		NewAccountTokenResource,

@@ -73,3 +73,36 @@ func (c *Client) GetClientConfig(mailDomainID string) (*ClientConfig, error) {
 func (c *Client) DisableClientConfig(mailDomainID string) error {
 	return c.Delete(fmt.Sprintf("/v1/mail/domains/%s/client-config", mailDomainID))
 }
+
+// MailDomainTLS mirrors apicp's per-mail-domain certificate record
+// (GET /v1/mail/domains/{id}/tls).
+type MailDomainTLS struct {
+	MailDomainID string `json:"mail_domain_id"`
+	Domain       string `json:"domain"`
+	Host         string `json:"host"`
+	NotBefore    string `json:"not_before,omitempty"`
+	NotAfter     string `json:"not_after,omitempty"`
+	IssuedAt     string `json:"issued_at,omitempty"`
+}
+
+// EnableMailDomainTLS implements POST /v1/mail/domains/{id}/tls - issues
+// mail.<domain>'s own certificate; idempotent, no request body.
+func (c *Client) EnableMailDomainTLS(mailDomainID string) (*MailDomainTLS, error) {
+	var t MailDomainTLS
+	if err := c.Post(fmt.Sprintf("/v1/mail/domains/%s/tls", mailDomainID), nil, &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (c *Client) GetMailDomainTLS(mailDomainID string) (*MailDomainTLS, error) {
+	var t MailDomainTLS
+	if err := c.Get(fmt.Sprintf("/v1/mail/domains/%s/tls", mailDomainID), &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (c *Client) DisableMailDomainTLS(mailDomainID string) error {
+	return c.Delete(fmt.Sprintf("/v1/mail/domains/%s/tls", mailDomainID))
+}
