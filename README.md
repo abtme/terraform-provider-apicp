@@ -50,6 +50,8 @@ syntax, is published on the
 | [`apicp_mail_domain`](docs/resources/mail_domain.md) | A mail domain (Postfix + Dovecot). |
 | [`apicp_mailbox`](docs/resources/mailbox.md) | A mailbox within a `apicp_mail_domain`. |
 | [`apicp_mail_forwarder`](docs/resources/mail_forwarder.md) | An email forwarder (or, with `local_part = "*"`, the catch-all) within a `apicp_mail_domain`. |
+| [`apicp_mail_tls`](docs/resources/mail_tls.md) | Node-wide mail TLS (IMAP/POP3 STARTTLS) and SMTP submission on 587. |
+| [`apicp_mail_client_config`](docs/resources/mail_client_config.md) | Mail-client autoconfiguration (SRV/MX/SPF/DMARC records, Thunderbird and Outlook documents) for a `apicp_mail_domain`. |
 | [`apicp_dkim`](docs/resources/dkim.md) | DKIM signing for a `apicp_mail_domain`. |
 | [`apicp_antispam`](docs/resources/antispam.md) | Node-wide Rspamd toggle. |
 | [`apicp_antivirus`](docs/resources/antivirus.md) | Node-wide ClamAV toggle. |

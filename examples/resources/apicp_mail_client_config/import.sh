@@ -1,0 +1,1 @@
+terraform import apicp_mail_client_config.example mdom_abc123
