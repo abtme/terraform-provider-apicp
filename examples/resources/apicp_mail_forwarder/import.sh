@@ -1,0 +1,1 @@
+terraform import apicp_mail_forwarder.sales mdom_abc123/fwd_xyz789

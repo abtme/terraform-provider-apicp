@@ -122,3 +122,57 @@ func (c *Client) ResetMailboxPassword(mailDomainID, id string) (*Mailbox, error)
 func (c *Client) DeleteMailbox(mailDomainID, id string) error {
 	return c.Delete(fmt.Sprintf("/v1/mail/domains/%s/mailboxes/%s", mailDomainID, id))
 }
+
+// Forwarder mirrors apicp's internal/mail.Forwarder JSON shape. LocalPart
+// "*" is the domain's catch-all.
+type Forwarder struct {
+	ID           string   `json:"id"`
+	MailDomainID string   `json:"mail_domain_id"`
+	LocalPart    string   `json:"local_part"`
+	Email        string   `json:"email"`
+	Destinations []string `json:"destinations"`
+	Status       string   `json:"status"`
+	Error        string   `json:"error,omitempty"`
+}
+
+type forwarderCreateRequest struct {
+	LocalPart    string   `json:"local_part"`
+	Destinations []string `json:"destinations"`
+}
+
+type forwarderUpdateRequest struct {
+	Destinations []string `json:"destinations"`
+}
+
+func (c *Client) CreateForwarder(mailDomainID, localPart string, destinations []string) (*Forwarder, error) {
+	var f Forwarder
+	path := fmt.Sprintf("/v1/mail/domains/%s/forwarders", mailDomainID)
+	if err := c.Post(path, forwarderCreateRequest{LocalPart: localPart, Destinations: destinations}, &f); err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+func (c *Client) GetForwarder(mailDomainID, id string) (*Forwarder, error) {
+	var f Forwarder
+	path := fmt.Sprintf("/v1/mail/domains/%s/forwarders/%s", mailDomainID, id)
+	if err := c.Get(path, &f); err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// UpdateForwarder implements PATCH .../forwarders/{id}, replacing the
+// destination list.
+func (c *Client) UpdateForwarder(mailDomainID, id string, destinations []string) (*Forwarder, error) {
+	var f Forwarder
+	path := fmt.Sprintf("/v1/mail/domains/%s/forwarders/%s", mailDomainID, id)
+	if err := c.Patch(path, forwarderUpdateRequest{Destinations: destinations}, &f); err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+func (c *Client) DeleteForwarder(mailDomainID, id string) error {
+	return c.Delete(fmt.Sprintf("/v1/mail/domains/%s/forwarders/%s", mailDomainID, id))
+}
