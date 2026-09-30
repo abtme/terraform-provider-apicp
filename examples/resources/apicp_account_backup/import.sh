@@ -1,0 +1,1 @@
+terraform import apicp_account_backup.nightly acct_abc123/bkp_xyz789

@@ -55,8 +55,9 @@ func (c *Client) DeleteAccount(id string) error {
 }
 
 type accountTokenCreateRequest struct {
-	Label  string   `json:"label"`
-	Scopes []string `json:"scopes"`
+	Label    string   `json:"label"`
+	Scopes   []string `json:"scopes"`
+	TOTPCode string   `json:"totp_code,omitempty"`
 }
 
 type AccountToken struct {
@@ -65,10 +66,10 @@ type AccountToken struct {
 
 // CreateAccountToken mints a new bearer token for accountID (PLAN.md §8
 // phase 1) - returned exactly once, apicp never stores or re-returns the
-// plaintext.
-func (c *Client) CreateAccountToken(accountID, label string, scopes []string) (*AccountToken, error) {
+// plaintext. totpCode is only needed when the account has TOTP enabled.
+func (c *Client) CreateAccountToken(accountID, label string, scopes []string, totpCode string) (*AccountToken, error) {
 	var t AccountToken
-	if err := c.Post("/v1/accounts/"+accountID+"/tokens", accountTokenCreateRequest{Label: label, Scopes: scopes}, &t); err != nil {
+	if err := c.Post("/v1/accounts/"+accountID+"/tokens", accountTokenCreateRequest{Label: label, Scopes: scopes, TOTPCode: totpCode}, &t); err != nil {
 		return nil, err
 	}
 	return &t, nil

@@ -52,6 +52,9 @@ syntax, is published on the
 | [`apicp_mail_forwarder`](docs/resources/mail_forwarder.md) | An email forwarder (or, with `local_part = "*"`, the catch-all) within a `apicp_mail_domain`. |
 | [`apicp_mail_tls`](docs/resources/mail_tls.md) | Node-wide mail TLS (IMAP/POP3 STARTTLS) and SMTP submission on 587. |
 | [`apicp_mail_client_config`](docs/resources/mail_client_config.md) | Mail-client autoconfiguration (SRV/MX/SPF/DMARC records, Thunderbird and Outlook documents) for a `apicp_mail_domain`. |
+| [`apicp_system_tls_config`](docs/resources/system_tls_config.md) | The ACME directory apicp issues certificates from (in-memory on apicpd - reverts on restart). |
+| [`apicp_account_backup`](docs/resources/account_backup.md) | One point-in-time backup of an `apicp_account`. |
+| [`apicp_account_token`](docs/resources/account_token.md) | An API token for an `apicp_account` (create-only: apicp cannot revoke tokens). |
 | [`apicp_dkim`](docs/resources/dkim.md) | DKIM signing for a `apicp_mail_domain`. |
 | [`apicp_antispam`](docs/resources/antispam.md) | Node-wide Rspamd toggle. |
 | [`apicp_antivirus`](docs/resources/antivirus.md) | Node-wide ClamAV toggle. |
@@ -71,6 +74,7 @@ syntax, is published on the
 | Data source | Description |
 |---|---|
 | [`apicp_account_stats`](docs/data-sources/account_stats.md) | Resource counts (web domains, databases, mailboxes, etc.) for a `apicp_account` — read-only in the API itself, so a data source rather than a resource. |
+| [`apicp_nodes`](docs/data-sources/nodes.md) | The nodes enrolled with apicp (read-only - nodes enrol via the installer). |
 
 ## Deliberately not built
 
