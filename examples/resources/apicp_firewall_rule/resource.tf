@@ -20,3 +20,12 @@ resource "apicp_firewall_rule" "block_attacker" {
   action     = "drop"
   comment    = "repeated brute-force attempts"
 }
+
+# One rule for several sources, IPv4 and IPv6 mixed.
+resource "apicp_firewall_rule" "block_scanners" {
+  depends_on = [apicp_firewall.this]
+  sources    = ["198.51.100.0/24", "203.0.113.77", "2001:db8:bad::/48"]
+  protocol   = "all"
+  action     = "drop"
+  comment    = "scanner ranges"
+}

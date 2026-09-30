@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -35,6 +37,7 @@ func NewFirewallRuleResource() resource.Resource { return &FirewallRuleResource{
 type FirewallRuleResourceModel struct {
 	ID       types.String `tfsdk:"id"`
 	Source   types.String `tfsdk:"source"`
+	Sources  types.Set    `tfsdk:"sources"`
 	Port     types.String `tfsdk:"port"`
 	Protocol types.String `tfsdk:"protocol"`
 	Action   types.String `tfsdk:"action"`
@@ -58,6 +61,13 @@ func (r *FirewallRuleResource) Schema(_ context.Context, _ resource.SchemaReques
 				Computed:            true,
 				MarkdownDescription: "CIDR (v4 or v6) or bare IP this rule applies to. Omit for \"anywhere\" (`0.0.0.0/0`/`::/0`). Changing this replaces the resource.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
+			"sources": schema.SetAttribute{
+				Optional:            true,
+				Computed:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Further CIDRs or bare IPs (any mix of IPv4 and IPv6) this rule applies to, in addition to `source`. One rule covers all of them. With neither `source` nor `sources` the rule applies to anywhere. A drop/reject rule for SSH/8080/8443 is only accepted when every source is specific. Changing this replaces the resource.",
+				PlanModifiers:       []planmodifier.Set{setplanmodifier.RequiresReplace(), setplanmodifier.UseStateForUnknown()},
 			},
 			"port": schema.StringAttribute{
 				Optional:            true,
@@ -97,13 +107,16 @@ func (r *FirewallRuleResource) Configure(_ context.Context, req resource.Configu
 	r.client = c
 }
 
-func (r *FirewallRuleResource) applyRule(rule *client.FirewallRule, m *FirewallRuleResourceModel) {
+func (r *FirewallRuleResource) applyRule(ctx context.Context, rule *client.FirewallRule, m *FirewallRuleResourceModel) diag.Diagnostics {
 	m.ID = types.StringValue(rule.ID)
 	m.Source = types.StringValue(rule.Source)
+	sources, diags := reconcileSources(ctx, m.Sources, rule.Sources)
+	m.Sources = sources
 	m.Port = types.StringValue(rule.Port)
 	m.Protocol = types.StringValue(rule.Protocol)
 	m.Action = types.StringValue(rule.Action)
 	m.Comment = types.StringValue(rule.Comment)
+	return diags
 }
 
 func (r *FirewallRuleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -113,15 +126,20 @@ func (r *FirewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
+	sources, diags := sourcesFromSet(ctx, plan.Sources)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	rule, err := r.client.CreateFirewallRule(
-		plan.Source.ValueString(), plan.Port.ValueString(),
+		plan.Source.ValueString(), sources, plan.Port.ValueString(),
 		plan.Protocol.ValueString(), plan.Action.ValueString(), plan.Comment.ValueString(),
 	)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating firewall rule", err.Error())
 		return
 	}
-	r.applyRule(rule, &plan)
+	resp.Diagnostics.Append(r.applyRule(ctx, rule, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -140,7 +158,7 @@ func (r *FirewallRuleResource) Read(ctx context.Context, req resource.ReadReques
 		resp.Diagnostics.AddError("Error reading firewall rule", err.Error())
 		return
 	}
-	r.applyRule(rule, &state)
+	resp.Diagnostics.Append(r.applyRule(ctx, rule, &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 

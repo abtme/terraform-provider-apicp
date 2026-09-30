@@ -1,0 +1,1 @@
+terraform import apicp_firewall_restriction.api 8080
