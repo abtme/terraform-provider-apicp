@@ -3,12 +3,12 @@
 page_title: "apicp_firewall_rule Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
-  Manages one rule in apicp's node-wide default-DROP firewall (PLAN.md §8 phase 7, requires apicp_firewall to actually be enabled for this to have any live effect). apicp refuses to create a drop/reject rule with no source restriction that would block SSH (22) or apicp's own control-plane API/agent ports (8080/8443) for everyone - the single mistake most likely to cause an unrecoverable lockout with no remote recovery path. To limit who can reach those ports use apicp_firewall_restriction.
+  Manages one rule in apicp's node-wide default-DROP firewall (PLAN.md §8 phase 7, requires apicp_firewall to actually be enabled for this to have any live effect). apicp refuses to create a drop/reject rule with no source restriction that would block SSH (22) or apicp's own control-plane API/agent ports (8080/8443) for everyone - the single mistake most likely to cause an unrecoverable lockout with no remote recovery path.
 ---
 
 # apicp_firewall_rule (Resource)
 
-Manages one rule in apicp's node-wide default-DROP firewall (PLAN.md §8 phase 7, requires `apicp_firewall` to actually be enabled for this to have any live effect). apicp refuses to create a drop/reject rule with no `source` restriction that would block SSH (22) or apicp's own control-plane API/agent ports (8080/8443) for everyone - the single mistake most likely to cause an unrecoverable lockout with no remote recovery path. To limit who can reach those ports use `apicp_firewall_restriction`.
+Manages one rule in apicp's node-wide default-DROP firewall (PLAN.md §8 phase 7, requires `apicp_firewall` to actually be enabled for this to have any live effect). apicp refuses to create a drop/reject rule with no `source` restriction that would block SSH (22) or apicp's own control-plane API/agent ports (8080/8443) for everyone - the single mistake most likely to cause an unrecoverable lockout with no remote recovery path.
 
 ## Example Usage
 

@@ -26,12 +26,15 @@ import (
 // doc comment), so Read deliberately never touches state's Password
 // field, matching apicp_dkim/apicp_database's own "state stays whatever
 // it already was" convention for write-only secrets - here that's just
-// belt-and-braces, since Password being Required (not Computed) means
+// belt-and-braces, since Password being an input (not Computed) means
 // Terraform already sources it from config on every plan regardless.
+// username/password are optional, together: a relay that accepts mail
+// by source address needs no login.
 type SMTPRelayResource struct{ client *client.Client }
 
 var _ resource.Resource = &SMTPRelayResource{}
 var _ resource.ResourceWithImportState = &SMTPRelayResource{}
+var _ resource.ResourceWithValidateConfig = &SMTPRelayResource{}
 
 func NewSMTPRelayResource() resource.Resource { return &SMTPRelayResource{} }
 
@@ -72,16 +75,38 @@ func (r *SMTPRelayResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				MarkdownDescription: "Smarthost port (typically 587 or 465).",
 			},
 			"username": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "SASL auth username for the smarthost.",
+				Optional:            true,
+				MarkdownDescription: "SASL auth username for the smarthost. Set `username` and `password` together, or omit both for a relay that accepts mail by source address without a login (an empty string is not accepted: omit the attribute). With a login apicp requires TLS to the relay; without one TLS is used when the relay offers it (port 465 is always TLS from the first byte).",
 			},
 			"password": schema.StringAttribute{
-				Required:            true,
+				Optional:            true,
 				Sensitive:           true,
-				MarkdownDescription: "SASL auth password. apicp never returns this back out (not even redacted-vs-set, no drift detection possible on this field) - it's write-only from Terraform's point of view.",
+				MarkdownDescription: "SASL auth password. Set together with `username`, or omit both. apicp never returns this back out (not even redacted-vs-set, no drift detection possible on this field) - it's write-only from Terraform's point of view.",
 			},
 			"status": schema.StringAttribute{Computed: true},
 		},
+	}
+}
+
+// ValidateConfig: username and password go together (a relay either has a login or it does not),
+// and an empty string is not a way to say "none" - omit the attribute. Unknown values (not yet
+// resolved from another resource) are left for apply, when apicp validates the request again.
+func (r *SMTPRelayResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var username, password types.String
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("username"), &username)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("password"), &password)...)
+	if resp.Diagnostics.HasError() || username.IsUnknown() || password.IsUnknown() {
+		return
+	}
+	for name, v := range map[string]types.String{"username": username, "password": password} {
+		if !v.IsNull() && v.ValueString() == "" {
+			resp.Diagnostics.AddAttributeError(path.Root(name), "Empty "+name,
+				"Omit the attribute for a relay that needs no login; an empty string is not accepted.")
+		}
+	}
+	if username.IsNull() != password.IsNull() {
+		resp.Diagnostics.AddAttributeError(path.Root("password"), "username and password go together",
+			"Set both for a relay that needs a login, or omit both for a relay that accepts mail without one.")
 	}
 }
 
@@ -104,7 +129,13 @@ func (r *SMTPRelayResource) apply(relay *client.SMTPRelay, m *SMTPRelayResourceM
 	m.NodeID = types.StringValue(relay.NodeID)
 	m.Host = types.StringValue(relay.Host)
 	m.Port = types.Int64Value(int64(relay.Port))
-	m.Username = types.StringValue(relay.Username)
+	// username is Optional, not Computed: with no login apicp returns "" and the state must stay
+	// null, or Terraform reports "inconsistent result after apply" against the planned null.
+	if relay.Username != "" {
+		m.Username = types.StringValue(relay.Username)
+	} else {
+		m.Username = types.StringNull()
+	}
 	m.Status = types.StringValue(relay.Status)
 }
 

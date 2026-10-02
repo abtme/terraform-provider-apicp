@@ -4,6 +4,7 @@ page_title: "apicp_firewall_restriction Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
   Limits one of the firewall's fixed service ports to a list of source addresses, so only those reach it and everyone else is dropped. This is how to restrict apicp's own API (8080), SSH (22) or a mail/web/DNS port to certain IPs. Ports that can be restricted: 22, 25, 53, 80, 110, 143, 443, 587, 993, 995, 8080 (the API) and 8443 (agents). Like rules it is stored while apicp_firewall is off and takes effect when that is on. A family with no listed source has the port closed there, so restricting to IPv4 addresses only also closes it over IPv6.
+  Lockout protection. For 22, 8080 and 8443, apicp refuses a restriction whose sources do not include the address Terraform is connecting from (apicp's own view of the connection, so behind a reverse proxy list the proxy), since that would lock you out with no remote way back. A caller on the node itself is always fine. For SSH only, force = true overrides it, for when the machine that uses SSH is not the one running Terraform. Restricting 8443 also cuts off every agent whose address is not listed. Destroying the resource opens the port to everyone again.
 ---
 
 # apicp_firewall_restriction (Resource)
