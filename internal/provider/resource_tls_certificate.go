@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -26,6 +27,7 @@ type TLSCertificateResourceModel struct {
 	ID        types.String `tfsdk:"id"`
 	VhostID   types.String `tfsdk:"vhost_id"`
 	Domain    types.String `tfsdk:"domain"`
+	Names     types.List   `tfsdk:"names"`
 	Status    types.String `tfsdk:"status"`
 	NotBefore types.String `tfsdk:"not_before"`
 	NotAfter  types.String `tfsdk:"not_after"`
@@ -50,6 +52,13 @@ func (r *TLSCertificateResource) Schema(_ context.Context, _ resource.SchemaRequ
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"domain": schema.StringAttribute{Computed: true},
+			"names": schema.ListAttribute{
+				Computed:    true,
+				ElementType: types.StringType,
+				MarkdownDescription: "Every host name the certificate covers: the vhost's domain, then its aliases. " +
+					"Adding an alias to the `apicp_web_domain` re-issues the certificate for the new set of names; " +
+					"this attribute follows on the next refresh.",
+			},
 			"status": schema.StringAttribute{Computed: true},
 			"not_before": schema.StringAttribute{
 				Computed:            true,
@@ -76,7 +85,14 @@ func (r *TLSCertificateResource) Configure(_ context.Context, req resource.Confi
 	r.client = c
 }
 
-func (r *TLSCertificateResource) applyCert(cert *client.Certificate, m *TLSCertificateResourceModel) {
+func (r *TLSCertificateResource) applyCert(ctx context.Context, cert *client.Certificate, m *TLSCertificateResourceModel) diag.Diagnostics {
+	names := cert.Names
+	if len(names) == 0 {
+		names = []string{cert.Domain} // a certificate issued before aliases existed covers its domain only
+	}
+
+	list, diags := types.ListValueFrom(ctx, types.StringType, names)
+	m.Names = list
 	m.ID = types.StringValue(cert.ID)
 	m.VhostID = types.StringValue(cert.VhostID)
 	m.Domain = types.StringValue(cert.Domain)
@@ -84,6 +100,8 @@ func (r *TLSCertificateResource) applyCert(cert *client.Certificate, m *TLSCerti
 	m.NotBefore = types.StringValue(cert.NotBefore)
 	m.NotAfter = types.StringValue(cert.NotAfter)
 	m.IssuedAt = types.StringValue(cert.IssuedAt)
+
+	return diags
 }
 
 func (r *TLSCertificateResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -98,7 +116,7 @@ func (r *TLSCertificateResource) Create(ctx context.Context, req resource.Create
 		resp.Diagnostics.AddError("Error issuing TLS certificate", err.Error())
 		return
 	}
-	r.applyCert(cert, &plan)
+	resp.Diagnostics.Append(r.applyCert(ctx, cert, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -118,7 +136,7 @@ func (r *TLSCertificateResource) Read(ctx context.Context, req resource.ReadRequ
 		resp.Diagnostics.AddError("Error reading TLS certificate", err.Error())
 		return
 	}
-	r.applyCert(cert, &state)
+	resp.Diagnostics.Append(r.applyCert(ctx, cert, &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 

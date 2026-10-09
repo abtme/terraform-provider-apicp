@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -25,6 +26,7 @@ type WebDomainResource struct{ client *client.Client }
 type WebDomainResourceModel struct {
 	ID           types.String `tfsdk:"id"`
 	Domain       types.String `tfsdk:"domain"`
+	Aliases      types.Set    `tfsdk:"aliases"`
 	NodeID       types.String `tfsdk:"node_id"`
 	DocumentRoot types.String `tfsdk:"document_root"`
 	UnixUser     types.String `tfsdk:"unix_user"`
@@ -48,6 +50,15 @@ func (r *WebDomainResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"domain": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "Domain name, e.g. `example.com`. Changing this renames the vhost in place (apicp removes the old nginx config and reapplies under the new domain) rather than replacing the resource.",
+			},
+			"aliases": schema.SetAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				MarkdownDescription: "Extra host names this vhost serves from the same document root, e.g. `www.example.com`. " +
+					"Lower case; each name must be unique across all vhosts (as a domain or an alias) and must resolve to the node. " +
+					"One `apicp_tls_certificate` covers the domain and every alias: adding an alias to a domain that already has a certificate " +
+					"orders a new one for all the names (if that fails the apply fails and nothing changes); removing an alias orders nothing, " +
+					"and the next automatic renewal leaves the name out.",
 			},
 			"node_id": schema.StringAttribute{
 				Computed:            true,
@@ -90,7 +101,31 @@ func (r *WebDomainResource) Configure(_ context.Context, req resource.ConfigureR
 	r.client = c
 }
 
-func (r *WebDomainResource) applyVhost(v *client.Vhost, m *WebDomainResourceModel) {
+// aliasSet turns the API's alias list into the attribute value. An empty list stays null when the
+// configuration left the attribute out, so a vhost without aliases does not show a perpetual diff.
+func aliasSet(ctx context.Context, aliases []string, current types.Set) (types.Set, diag.Diagnostics) {
+	if len(aliases) == 0 && (current.IsNull() || current.IsUnknown()) {
+		return types.SetNull(types.StringType), nil
+	}
+
+	// never a nil slice: SetValueFrom turns that into a null set, but an empty list that was configured
+	// must come back as an empty set or Terraform reports an inconsistent result after apply
+	return types.SetValueFrom(ctx, types.StringType, append([]string{}, aliases...))
+}
+
+func aliasList(ctx context.Context, s types.Set) ([]string, diag.Diagnostics) {
+	if s.IsNull() || s.IsUnknown() {
+		return nil, nil
+	}
+
+	var out []string
+
+	return out, s.ElementsAs(ctx, &out, false)
+}
+
+func (r *WebDomainResource) applyVhost(ctx context.Context, v *client.Vhost, m *WebDomainResourceModel) diag.Diagnostics {
+	aliases, diags := aliasSet(ctx, v.Aliases, m.Aliases)
+	m.Aliases = aliases
 	m.ID = types.StringValue(v.ID)
 	m.Domain = types.StringValue(v.Domain)
 	m.NodeID = types.StringValue(v.NodeID)
@@ -99,6 +134,8 @@ func (r *WebDomainResource) applyVhost(v *client.Vhost, m *WebDomainResourceMode
 	m.Status = types.StringValue(v.Status)
 	m.TLSEnabled = types.BoolValue(v.TLSEnabled)
 	m.PHPVersion = types.StringValue(v.PHPVersion)
+
+	return diags
 }
 
 func (r *WebDomainResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -108,12 +145,18 @@ func (r *WebDomainResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	v, err := r.client.CreateVhost(plan.Domain.ValueString(), plan.PHPVersion.ValueString())
+	aliases, diags := aliasList(ctx, plan.Aliases)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	v, err := r.client.CreateVhost(plan.Domain.ValueString(), aliases, plan.PHPVersion.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating web domain", err.Error())
 		return
 	}
-	r.applyVhost(v, &plan)
+	resp.Diagnostics.Append(r.applyVhost(ctx, v, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -133,7 +176,7 @@ func (r *WebDomainResource) Read(ctx context.Context, req resource.ReadRequest, 
 		resp.Diagnostics.AddError("Error reading web domain", err.Error())
 		return
 	}
-	r.applyVhost(v, &state)
+	resp.Diagnostics.Append(r.applyVhost(ctx, v, &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -145,12 +188,18 @@ func (r *WebDomainResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	v, err := r.client.PatchVhost(state.ID.ValueString(), plan.Domain.ValueString(), plan.PHPVersion.ValueString())
+	aliases, diags := aliasList(ctx, plan.Aliases)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	v, err := r.client.PatchVhost(state.ID.ValueString(), plan.Domain.ValueString(), aliases, plan.PHPVersion.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating web domain", err.Error())
 		return
 	}
-	r.applyVhost(v, &plan)
+	resp.Diagnostics.Append(r.applyVhost(ctx, v, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

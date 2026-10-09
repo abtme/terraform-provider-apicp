@@ -34,6 +34,7 @@ resource "apicp_tls_certificate" "example" {
 - `domain` (String)
 - `id` (String) The ID of this resource.
 - `issued_at` (String)
+- `names` (List of String) Every host name the certificate covers: the vhost's domain, then its aliases. Adding an alias to the `apicp_web_domain` re-issues the certificate for the new set of names; this attribute follows on the next refresh.
 - `not_after` (String) Certificate validity end (RFC 3339) — apicp does not auto-renew yet; re-apply before this to renew.
 - `not_before` (String) Certificate validity start (RFC 3339).
 - `status` (String)

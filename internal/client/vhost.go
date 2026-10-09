@@ -4,16 +4,18 @@ import "fmt"
 
 // Vhost mirrors apicp's internal/vhost.Vhost JSON shape.
 type Vhost struct {
-	ID           string `json:"id"`
-	Domain       string `json:"domain"`
-	NodeID       string `json:"node_id"`
-	DocumentRoot string `json:"document_root"`
-	UnixUser     string `json:"unix_user"`
-	Status       string `json:"status"`
-	Error        string `json:"error,omitempty"`
-	TLSEnabled   bool   `json:"tls_enabled"`
-	TLSCertPath  string `json:"tls_cert_path,omitempty"`
-	TLSKeyPath   string `json:"tls_key_path,omitempty"`
+	ID     string `json:"id"`
+	Domain string `json:"domain"`
+	// Aliases are extra host names the vhost serves; one certificate covers the domain and all of them.
+	Aliases      []string `json:"aliases,omitempty"`
+	NodeID       string   `json:"node_id"`
+	DocumentRoot string   `json:"document_root"`
+	UnixUser     string   `json:"unix_user"`
+	Status       string   `json:"status"`
+	Error        string   `json:"error,omitempty"`
+	TLSEnabled   bool     `json:"tls_enabled"`
+	TLSCertPath  string   `json:"tls_cert_path,omitempty"`
+	TLSKeyPath   string   `json:"tls_key_path,omitempty"`
 	// PHPVersion is "" for a static (no PHP-FPM) vhost, or one of
 	// apicp's PLAN.md §8 phase 2 supported versions (see the provider's
 	// own php_version schema description for the current list).
@@ -21,18 +23,20 @@ type Vhost struct {
 }
 
 type vhostCreateRequest struct {
-	Domain     string `json:"domain"`
-	PHPVersion string `json:"php_version,omitempty"`
+	Domain     string   `json:"domain"`
+	Aliases    []string `json:"aliases,omitempty"`
+	PHPVersion string   `json:"php_version,omitempty"`
 }
 
 type vhostPatchRequest struct {
-	Domain     *string `json:"domain,omitempty"`
-	PHPVersion *string `json:"php_version,omitempty"`
+	Domain     *string   `json:"domain,omitempty"`
+	PHPVersion *string   `json:"php_version,omitempty"`
+	Aliases    *[]string `json:"aliases,omitempty"`
 }
 
-func (c *Client) CreateVhost(domain, phpVersion string) (*Vhost, error) {
+func (c *Client) CreateVhost(domain string, aliases []string, phpVersion string) (*Vhost, error) {
 	var v Vhost
-	if err := c.Post("/v1/vhosts", vhostCreateRequest{Domain: domain, PHPVersion: phpVersion}, &v); err != nil {
+	if err := c.Post("/v1/vhosts", vhostCreateRequest{Domain: domain, Aliases: aliases, PHPVersion: phpVersion}, &v); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -52,9 +56,16 @@ func (c *Client) GetVhost(id string) (*Vhost, error) {
 // (never nil) since the resource always has a resolved plan value for
 // each by the time Update runs; PATCH is idempotent, so re-sending an
 // unchanged value is a no-op.
-func (c *Client) PatchVhost(id, domain, phpVersion string) (*Vhost, error) {
+//
+// aliases is always sent, and as a list even when empty, because the API replaces the whole list: an
+// empty list is how an alias is removed.
+func (c *Client) PatchVhost(id, domain string, aliases []string, phpVersion string) (*Vhost, error) {
 	var v Vhost
-	if err := c.Patch("/v1/vhosts/"+id, vhostPatchRequest{Domain: &domain, PHPVersion: &phpVersion}, &v); err != nil {
+	if aliases == nil {
+		aliases = []string{}
+	}
+
+	if err := c.Patch("/v1/vhosts/"+id, vhostPatchRequest{Domain: &domain, PHPVersion: &phpVersion, Aliases: &aliases}, &v); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -66,14 +77,16 @@ func (c *Client) DeleteVhost(id string) error {
 
 // Certificate mirrors apicp's internal/tlscert.Certificate JSON shape.
 type Certificate struct {
-	ID        string `json:"id"`
-	VhostID   string `json:"vhost_id"`
-	Domain    string `json:"domain"`
-	Status    string `json:"status"`
-	Error     string `json:"error,omitempty"`
-	NotBefore string `json:"not_before,omitempty"`
-	NotAfter  string `json:"not_after,omitempty"`
-	IssuedAt  string `json:"issued_at"`
+	ID      string `json:"id"`
+	VhostID string `json:"vhost_id"`
+	Domain  string `json:"domain"`
+	// Names are every host name the certificate covers: the vhost's domain, then its aliases.
+	Names     []string `json:"names,omitempty"`
+	Status    string   `json:"status"`
+	Error     string   `json:"error,omitempty"`
+	NotBefore string   `json:"not_before,omitempty"`
+	NotAfter  string   `json:"not_after,omitempty"`
+	IssuedAt  string   `json:"issued_at"`
 }
 
 // IssueCertificate implements POST /v1/vhosts/{id}/certificate — takes no
