@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -32,11 +34,12 @@ type mailClientConfigRecordModel struct {
 }
 
 type MailClientConfigResourceModel struct {
-	ID            types.String                  `tfsdk:"id"`
-	MailDomainID  types.String                  `tfsdk:"mail_domain_id"`
-	Host          types.String                  `tfsdk:"host"`
-	AutoconfigURL types.String                  `tfsdk:"autoconfig_url"`
-	Records       []mailClientConfigRecordModel `tfsdk:"records"`
+	ID            types.String `tfsdk:"id"`
+	MailDomainID  types.String `tfsdk:"mail_domain_id"`
+	Host          types.String `tfsdk:"host"`
+	AutoconfigURL types.String `tfsdk:"autoconfig_url"`
+	// types.List, not a slice: records is computed, so it is unknown in the plan of a create, which a slice cannot hold.
+	Records types.List `tfsdk:"records"`
 }
 
 func (r *MailClientConfigResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -92,20 +95,30 @@ func (r *MailClientConfigResource) Configure(_ context.Context, req resource.Con
 	r.client = c
 }
 
-func (r *MailClientConfigResource) apply(cc *client.ClientConfig, m *MailClientConfigResourceModel) {
+var mailClientConfigRecordType = types.ObjectType{AttrTypes: map[string]attr.Type{
+	"name":    types.StringType,
+	"type":    types.StringType,
+	"content": types.StringType,
+	"action":  types.StringType,
+}}
+
+func (r *MailClientConfigResource) apply(ctx context.Context, cc *client.ClientConfig, m *MailClientConfigResourceModel) diag.Diagnostics {
 	m.ID = types.StringValue(cc.MailDomainID)
 	m.MailDomainID = types.StringValue(cc.MailDomainID)
 	m.Host = types.StringValue(cc.Host)
 	m.AutoconfigURL = types.StringValue(cc.AutoconfigURL)
-	m.Records = make([]mailClientConfigRecordModel, 0, len(cc.Records))
+	recs := make([]mailClientConfigRecordModel, 0, len(cc.Records))
 	for _, rec := range cc.Records {
-		m.Records = append(m.Records, mailClientConfigRecordModel{
+		recs = append(recs, mailClientConfigRecordModel{
 			Name:    types.StringValue(rec.Name),
 			Type:    types.StringValue(rec.Type),
 			Content: types.StringValue(rec.Content),
 			Action:  types.StringValue(rec.Action),
 		})
 	}
+	list, diags := types.ListValueFrom(ctx, mailClientConfigRecordType, recs)
+	m.Records = list
+	return diags
 }
 
 func (r *MailClientConfigResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -119,7 +132,7 @@ func (r *MailClientConfigResource) Create(ctx context.Context, req resource.Crea
 		resp.Diagnostics.AddError("Error enabling mail client config", err.Error())
 		return
 	}
-	r.apply(cc, &plan)
+	resp.Diagnostics.Append(r.apply(ctx, cc, &plan)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -138,7 +151,7 @@ func (r *MailClientConfigResource) Read(ctx context.Context, req resource.ReadRe
 		resp.Diagnostics.AddError("Error reading mail client config", err.Error())
 		return
 	}
-	r.apply(cc, &state)
+	resp.Diagnostics.Append(r.apply(ctx, cc, &state)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
