@@ -14,7 +14,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/abtme/terraform-provider-apicp/internal/client"
@@ -59,8 +58,7 @@ func (r *FirewallRestrictionResource) Schema(_ context.Context, _ resource.Schem
 			"sources": schema.SetAttribute{
 				Required:            true,
 				ElementType:         types.StringType,
-				MarkdownDescription: "CIDRs or bare IPs, any mix of IPv4 and IPv6, that may reach the port. At least one; `0.0.0.0/0` and `::/0` are refused (that is no restriction - destroy the resource instead).",
-				Validators:          []validator.Set{nonEmptySet{}},
+				MarkdownDescription: "CIDRs or bare IPs, any mix of IPv4 and IPv6, that may reach the port. At least one unless an `apicp_firewall_site` reaches the port (then `[]` means \"from my sites only\"; apicp refuses an empty list otherwise). `0.0.0.0/0` and `::/0` are refused (that is no restriction - destroy the resource instead).",
 			},
 			"comment": schema.StringAttribute{
 				Optional:            true,
@@ -181,24 +179,4 @@ func (r *FirewallRestrictionResource) ImportState(ctx context.Context, req resou
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("port"), port)...)
-}
-
-// nonEmptySet rejects an empty set at plan time: a restriction with no
-// sources would close the port to everyone, which is never what is meant
-// (apicp refuses it too).
-type nonEmptySet struct{}
-
-func (nonEmptySet) Description(context.Context) string { return "must contain at least one element" }
-func (v nonEmptySet) MarkdownDescription(ctx context.Context) string {
-	return v.Description(ctx)
-}
-
-func (nonEmptySet) ValidateSet(_ context.Context, req validator.SetRequest, resp *validator.SetResponse) {
-	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
-		return
-	}
-	if len(req.ConfigValue.Elements()) == 0 {
-		resp.Diagnostics.AddAttributeError(req.Path, "Empty sources",
-			"A restriction needs at least one source; with none it would close the port to everyone. Destroy the resource to open the port again.")
-	}
 }

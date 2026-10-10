@@ -122,3 +122,57 @@ func (c *Client) GetFirewallRestriction(port int) (*FirewallRestriction, error) 
 func (c *Client) DeleteFirewallRestriction(port int) error {
 	return c.Delete(fmt.Sprintf("/v1/firewall/restrictions/%d", port))
 }
+
+// FirewallSite mirrors apicp's internal/firewall.Site JSON shape: a connection on
+// a dynamic address, kept as a DNS name that follows it.
+type FirewallSite struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Host      string   `json:"host"`
+	Enabled   bool     `json:"enabled"`
+	Ports     []int    `json:"ports,omitempty"`
+	Addresses []string `json:"addresses"`
+	Changed   string   `json:"changed,omitempty"`
+}
+
+type FirewallSiteInput struct {
+	Name    string `json:"name"`
+	Host    string `json:"host"`
+	Enabled *bool  `json:"enabled,omitempty"`
+	Ports   []int  `json:"ports,omitempty"`
+}
+
+type FirewallSitePatch struct {
+	Name    *string `json:"name,omitempty"`
+	Host    *string `json:"host,omitempty"`
+	Enabled *bool   `json:"enabled,omitempty"`
+	Ports   *[]int  `json:"ports,omitempty"`
+}
+
+func (c *Client) CreateFirewallSite(in FirewallSiteInput) (*FirewallSite, error) {
+	var s FirewallSite
+	if err := c.Post("/v1/firewall/sites", in, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (c *Client) GetFirewallSite(id string) (*FirewallSite, error) {
+	var s FirewallSite
+	if err := c.Get("/v1/firewall/sites/"+id, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (c *Client) UpdateFirewallSite(id string, p FirewallSitePatch) (*FirewallSite, error) {
+	var s FirewallSite
+	if err := c.Patch("/v1/firewall/sites/"+id, p, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (c *Client) DeleteFirewallSite(id string) error {
+	return c.Delete("/v1/firewall/sites/" + id)
+}

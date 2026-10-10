@@ -51,7 +51,7 @@ resource "apicp_firewall_restriction" "pop3" {
 ### Required
 
 - `port` (Number) The service port to restrict. Changing this replaces the resource.
-- `sources` (Set of String) CIDRs or bare IPs, any mix of IPv4 and IPv6, that may reach the port. At least one; `0.0.0.0/0` and `::/0` are refused (that is no restriction - destroy the resource instead).
+- `sources` (Set of String) CIDRs or bare IPs, any mix of IPv4 and IPv6, that may reach the port. At least one unless an `apicp_firewall_site` reaches the port (then `[]` means "from my sites only"; apicp refuses an empty list otherwise). `0.0.0.0/0` and `::/0` are refused (that is no restriction - destroy the resource instead).
 
 ### Optional
 
