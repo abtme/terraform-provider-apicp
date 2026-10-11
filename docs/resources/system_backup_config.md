@@ -28,7 +28,7 @@ output "system_backup_last_run_at" {
 
 ### Required
 
-- `destination` (String) Where the scheduler writes archives. Currently only `"local"` is supported (apicp's own filesystem, PLAN.md §7.3's `LocalTarget`).
+- `destination` (String) Where the scheduler writes archives. `"local"` (apicp's own filesystem, the default) or `"sftp"` (a remote SFTP server such as a Hetzner Storage Box; the server must have its APICP_BACKUP_SFTP_* settings configured or the API refuses it).
 - `enabled` (Boolean) Whether apicpd's internal backup scheduler is turned on.
 
 ### Read-Only
