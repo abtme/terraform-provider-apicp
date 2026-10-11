@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -38,6 +39,13 @@ type SystemBackupConfigResourceModel struct {
 	Enabled      types.Bool   `tfsdk:"enabled"`
 	Destination  types.String `tfsdk:"destination"`
 	Retention    types.Int64  `tfsdk:"retention"`
+	Format       types.String `tfsdk:"format"`
+	Compress     types.Bool   `tfsdk:"compress"`
+	Encrypt      types.Bool   `tfsdk:"encrypt"`
+	ScheduleTime types.String `tfsdk:"schedule_time"`
+	ScheduleDays types.Set    `tfsdk:"schedule_days"`
+	Timezone     types.String `tfsdk:"timezone"`
+	NextRunAt    types.String `tfsdk:"next_run_at"`
 	LastRunAt    types.String `tfsdk:"last_run_at"`
 	LastRunError types.String `tfsdk:"last_run_error"`
 }
@@ -48,7 +56,7 @@ func (r *SystemBackupConfigResource) Metadata(_ context.Context, req resource.Me
 
 func (r *SystemBackupConfigResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Configures apicp's system-level backup scheduler (PLAN.md §7.1/§8 phase 5) - a singleton resource, one per apicp install. Requires an admin-tier provider token. Only `enabled` and `destination` are settable: the backup mechanics themselves (what gets archived, on what schedule) are an internal apicpd decision, never exposed through this resource or the underlying API - by explicit design, not an oversight.",
+		MarkdownDescription: "Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, and how they are written (format, compression, encryption). The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (`/v1/system/backup-sftp`, `/v1/system/backup-encryption`), not in Terraform state.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -67,6 +75,35 @@ func (r *SystemBackupConfigResource) Schema(_ context.Context, _ resource.Schema
 				Computed:            true,
 				Default:             int64default.StaticInt64(0),
 				MarkdownDescription: "How many backups to keep per account (and of the system state): after each new backup the older ones beyond this are deleted. `0` (the default) keeps every backup; otherwise 1 to 99.",
+			},
+			"format": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "How archives are written: `targz`, `zip` or `raw` (plain files in a folder). Omit for the server's default.",
+			},
+			"compress": schema.BoolAttribute{
+				Optional:            true,
+				MarkdownDescription: "Compress the archive file. Omit for the server default (on). The parts from the node are already compressed, and raw files are unaffected.",
+			},
+			"encrypt": schema.BoolAttribute{
+				Optional:            true,
+				MarkdownDescription: "Encrypt backups. Omit for the server default: on whenever it has an encryption key. `true` without a key is refused. Keys are set up in the panel or API, never here.",
+			},
+			"schedule_time": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Time of day to run, 24-hour `HH:MM` (for example `03:30`). Omit to run every 24 hours.",
+			},
+			"schedule_days": schema.SetAttribute{
+				Optional:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Days to run on (`mon` to `sun`). Omit for every day. Needs `schedule_time`.",
+			},
+			"timezone": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "IANA timezone the schedule is read in, for example `Europe/London`. Omit for UTC. Needs `schedule_time`.",
+			},
+			"next_run_at": schema.StringAttribute{
+				Computed:            true,
+				MarkdownDescription: "RFC3339 time of the next scheduled run, when enabled with a schedule.",
 			},
 			"last_run_at": schema.StringAttribute{
 				Computed:            true,
@@ -97,6 +134,7 @@ func (r *SystemBackupConfigResource) apply(cfg *client.SystemBackupConfig, m *Sy
 	m.Enabled = types.BoolValue(cfg.Enabled)
 	m.Destination = types.StringValue(cfg.Destination)
 	m.Retention = types.Int64Value(int64(cfg.Retention))
+	m.NextRunAt = types.StringValue(cfg.NextRunAt)
 	m.LastRunAt = types.StringValue(cfg.LastRunAt)
 	m.LastRunError = types.StringValue(cfg.LastRunError)
 }
@@ -107,7 +145,7 @@ func (r *SystemBackupConfigResource) Create(ctx context.Context, req resource.Cr
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	cfg, err := r.client.SetSystemBackupConfig(plan.Enabled.ValueBool(), plan.Destination.ValueString(), int(plan.Retention.ValueInt64()))
+	cfg, err := r.client.SetSystemBackupConfig(configInput(ctx, &plan, plan.Enabled.ValueBool(), &resp.Diagnostics))
 	if err != nil {
 		resp.Diagnostics.AddError("Error setting system backup config", err.Error())
 		return
@@ -137,7 +175,7 @@ func (r *SystemBackupConfigResource) Update(ctx context.Context, req resource.Up
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	cfg, err := r.client.SetSystemBackupConfig(plan.Enabled.ValueBool(), plan.Destination.ValueString(), int(plan.Retention.ValueInt64()))
+	cfg, err := r.client.SetSystemBackupConfig(configInput(ctx, &plan, plan.Enabled.ValueBool(), &resp.Diagnostics))
 	if err != nil {
 		resp.Diagnostics.AddError("Error setting system backup config", err.Error())
 		return
@@ -155,11 +193,32 @@ func (r *SystemBackupConfigResource) Delete(ctx context.Context, req resource.De
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if _, err := r.client.SetSystemBackupConfig(false, state.Destination.ValueString(), int(state.Retention.ValueInt64())); err != nil {
+	if _, err := r.client.SetSystemBackupConfig(configInput(ctx, &state, false, &resp.Diagnostics)); err != nil {
 		resp.Diagnostics.AddError("Error disabling system backup config", err.Error())
 	}
 }
 
 func (r *SystemBackupConfigResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// configInput builds the PUT body from the model. The server replaces the
+// whole config, so every setting the model holds is sent.
+func configInput(ctx context.Context, m *SystemBackupConfigResourceModel, enabled bool, diags *diag.Diagnostics) client.SystemBackupConfigInput {
+	in := client.SystemBackupConfigInput{
+		Enabled: enabled, Destination: m.Destination.ValueString(), Retention: int(m.Retention.ValueInt64()),
+		Format: m.Format.ValueString(), ScheduleTime: m.ScheduleTime.ValueString(), Timezone: m.Timezone.ValueString(),
+	}
+	if !m.Compress.IsNull() && !m.Compress.IsUnknown() {
+		v := m.Compress.ValueBool()
+		in.Compress = &v
+	}
+	if !m.Encrypt.IsNull() && !m.Encrypt.IsUnknown() {
+		v := m.Encrypt.ValueBool()
+		in.Encrypt = &v
+	}
+	if !m.ScheduleDays.IsNull() && !m.ScheduleDays.IsUnknown() {
+		diags.Append(m.ScheduleDays.ElementsAs(ctx, &in.ScheduleDays, false)...)
+	}
+	return in
 }

@@ -3,12 +3,12 @@
 page_title: "apicp_system_backup_config Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
-  Configures apicp's system-level backup scheduler (PLAN.md §7.1/§8 phase 5) - a singleton resource, one per apicp install. Requires an admin-tier provider token. Only enabled and destination are settable: the backup mechanics themselves (what gets archived, on what schedule) are an internal apicpd decision, never exposed through this resource or the underlying API - by explicit design, not an oversight.
+  Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, and how they are written (format, compression, encryption). The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (/v1/system/backup-sftp, /v1/system/backup-encryption), not in Terraform state.
 ---
 
 # apicp_system_backup_config (Resource)
 
-Configures apicp's system-level backup scheduler (PLAN.md §7.1/§8 phase 5) - a singleton resource, one per apicp install. Requires an admin-tier provider token. Only `enabled` and `destination` are settable: the backup mechanics themselves (what gets archived, on what schedule) are an internal apicpd decision, never exposed through this resource or the underlying API - by explicit design, not an oversight.
+Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, and how they are written (format, compression, encryption). The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (`/v1/system/backup-sftp`, `/v1/system/backup-encryption`), not in Terraform state.
 
 ## Example Usage
 
@@ -33,10 +33,17 @@ output "system_backup_last_run_at" {
 
 ### Optional
 
+- `compress` (Boolean) Compress the archive file. Omit for the server default (on). The parts from the node are already compressed, and raw files are unaffected.
+- `encrypt` (Boolean) Encrypt backups. Omit for the server default: on whenever it has an encryption key. `true` without a key is refused. Keys are set up in the panel or API, never here.
+- `format` (String) How archives are written: `targz`, `zip` or `raw` (plain files in a folder). Omit for the server's default.
 - `retention` (Number) How many backups to keep per account (and of the system state): after each new backup the older ones beyond this are deleted. `0` (the default) keeps every backup; otherwise 1 to 99.
+- `schedule_days` (Set of String) Days to run on (`mon` to `sun`). Omit for every day. Needs `schedule_time`.
+- `schedule_time` (String) Time of day to run, 24-hour `HH:MM` (for example `03:30`). Omit to run every 24 hours.
+- `timezone` (String) IANA timezone the schedule is read in, for example `Europe/London`. Omit for UTC. Needs `schedule_time`.
 
 ### Read-Only
 
 - `id` (String) The ID of this resource.
 - `last_run_at` (String) RFC3339 timestamp of the scheduler's last run, if it has run at least once.
 - `last_run_error` (String) Error from the scheduler's last run, if it failed.
+- `next_run_at` (String) RFC3339 time of the next scheduled run, when enabled with a schedule.
