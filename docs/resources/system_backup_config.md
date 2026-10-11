@@ -31,6 +31,10 @@ output "system_backup_last_run_at" {
 - `destination` (String) Where the scheduler writes archives. `"local"` (apicp's own filesystem, the default) or `"sftp"` (a remote SFTP server such as a Hetzner Storage Box; the server must have its APICP_BACKUP_SFTP_* settings configured or the API refuses it).
 - `enabled` (Boolean) Whether apicpd's internal backup scheduler is turned on.
 
+### Optional
+
+- `retention` (Number) How many backups to keep per account (and of the system state): after each new backup the older ones beyond this are deleted. `0` (the default) keeps every backup; otherwise 1 to 99.
+
 ### Read-Only
 
 - `id` (String) The ID of this resource.

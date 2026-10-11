@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -36,6 +37,7 @@ type SystemBackupConfigResourceModel struct {
 	ID           types.String `tfsdk:"id"`
 	Enabled      types.Bool   `tfsdk:"enabled"`
 	Destination  types.String `tfsdk:"destination"`
+	Retention    types.Int64  `tfsdk:"retention"`
 	LastRunAt    types.String `tfsdk:"last_run_at"`
 	LastRunError types.String `tfsdk:"last_run_error"`
 }
@@ -59,6 +61,12 @@ func (r *SystemBackupConfigResource) Schema(_ context.Context, _ resource.Schema
 			"destination": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "Where the scheduler writes archives. `\"local\"` (apicp's own filesystem, the default) or `\"sftp\"` (a remote SFTP server such as a Hetzner Storage Box; the server must have its APICP_BACKUP_SFTP_* settings configured or the API refuses it).",
+			},
+			"retention": schema.Int64Attribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             int64default.StaticInt64(0),
+				MarkdownDescription: "How many backups to keep per account (and of the system state): after each new backup the older ones beyond this are deleted. `0` (the default) keeps every backup; otherwise 1 to 99.",
 			},
 			"last_run_at": schema.StringAttribute{
 				Computed:            true,
@@ -88,6 +96,7 @@ func (r *SystemBackupConfigResource) apply(cfg *client.SystemBackupConfig, m *Sy
 	m.ID = types.StringValue("system_backup_config")
 	m.Enabled = types.BoolValue(cfg.Enabled)
 	m.Destination = types.StringValue(cfg.Destination)
+	m.Retention = types.Int64Value(int64(cfg.Retention))
 	m.LastRunAt = types.StringValue(cfg.LastRunAt)
 	m.LastRunError = types.StringValue(cfg.LastRunError)
 }
@@ -98,7 +107,7 @@ func (r *SystemBackupConfigResource) Create(ctx context.Context, req resource.Cr
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	cfg, err := r.client.SetSystemBackupConfig(plan.Enabled.ValueBool(), plan.Destination.ValueString())
+	cfg, err := r.client.SetSystemBackupConfig(plan.Enabled.ValueBool(), plan.Destination.ValueString(), int(plan.Retention.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("Error setting system backup config", err.Error())
 		return
@@ -128,7 +137,7 @@ func (r *SystemBackupConfigResource) Update(ctx context.Context, req resource.Up
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	cfg, err := r.client.SetSystemBackupConfig(plan.Enabled.ValueBool(), plan.Destination.ValueString())
+	cfg, err := r.client.SetSystemBackupConfig(plan.Enabled.ValueBool(), plan.Destination.ValueString(), int(plan.Retention.ValueInt64()))
 	if err != nil {
 		resp.Diagnostics.AddError("Error setting system backup config", err.Error())
 		return
@@ -146,7 +155,7 @@ func (r *SystemBackupConfigResource) Delete(ctx context.Context, req resource.De
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if _, err := r.client.SetSystemBackupConfig(false, state.Destination.ValueString()); err != nil {
+	if _, err := r.client.SetSystemBackupConfig(false, state.Destination.ValueString(), int(state.Retention.ValueInt64())); err != nil {
 		resp.Diagnostics.AddError("Error disabling system backup config", err.Error())
 	}
 }

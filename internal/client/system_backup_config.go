@@ -7,6 +7,7 @@ package client
 type SystemBackupConfig struct {
 	Enabled      bool   `json:"enabled"`
 	Destination  string `json:"destination"`
+	Retention    int    `json:"retention"`
 	UpdatedAt    string `json:"updated_at"`
 	LastRunAt    string `json:"last_run_at,omitempty"`
 	LastRunError string `json:"last_run_error,omitempty"`
@@ -15,6 +16,7 @@ type SystemBackupConfig struct {
 type systemBackupConfigRequest struct {
 	Enabled     bool   `json:"enabled"`
 	Destination string `json:"destination"`
+	Retention   int    `json:"retention"`
 }
 
 func (c *Client) GetSystemBackupConfig() (*SystemBackupConfig, error) {
@@ -25,9 +27,9 @@ func (c *Client) GetSystemBackupConfig() (*SystemBackupConfig, error) {
 	return &cfg, nil
 }
 
-func (c *Client) SetSystemBackupConfig(enabled bool, destination string) (*SystemBackupConfig, error) {
+func (c *Client) SetSystemBackupConfig(enabled bool, destination string, retention int) (*SystemBackupConfig, error) {
 	var cfg SystemBackupConfig
-	req := systemBackupConfigRequest{Enabled: enabled, Destination: destination}
+	req := systemBackupConfigRequest{Enabled: enabled, Destination: destination, Retention: retention}
 	if err := c.Put("/v1/system/backup-config", req, &cfg); err != nil {
 		return nil, err
 	}
