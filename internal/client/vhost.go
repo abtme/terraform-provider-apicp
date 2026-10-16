@@ -20,23 +20,41 @@ type Vhost struct {
 	// apicp's PLAN.md §8 phase 2 supported versions (see the provider's
 	// own php_version schema description for the current list).
 	PHPVersion string `json:"php_version,omitempty"`
+	// NodeVersion is set when the vhost runs a Node.js app (then PHPVersion is ""), AppEntry is its start file
+	// relative to ~/app ("" = apicp's default) and AppPort the loopback port apicp gave it.
+	NodeVersion string `json:"node_version,omitempty"`
+	AppEntry    string `json:"app_entry,omitempty"`
+	AppPort     int    `json:"app_port,omitempty"`
+}
+
+// VhostRuntime is what runs a vhost: nothing (static), a PHP version, or a Node.js app. apicp refuses PHP and Node
+// together.
+type VhostRuntime struct {
+	PHPVersion  string
+	NodeVersion string
+	AppEntry    string
 }
 
 type vhostCreateRequest struct {
-	Domain     string   `json:"domain"`
-	Aliases    []string `json:"aliases,omitempty"`
-	PHPVersion string   `json:"php_version,omitempty"`
+	Domain      string   `json:"domain"`
+	Aliases     []string `json:"aliases,omitempty"`
+	PHPVersion  string   `json:"php_version,omitempty"`
+	NodeVersion string   `json:"node_version,omitempty"`
+	AppEntry    string   `json:"app_entry,omitempty"`
 }
 
 type vhostPatchRequest struct {
-	Domain     *string   `json:"domain,omitempty"`
-	PHPVersion *string   `json:"php_version,omitempty"`
-	Aliases    *[]string `json:"aliases,omitempty"`
+	Domain      *string   `json:"domain,omitempty"`
+	PHPVersion  *string   `json:"php_version,omitempty"`
+	NodeVersion *string   `json:"node_version,omitempty"`
+	AppEntry    *string   `json:"app_entry,omitempty"`
+	Aliases     *[]string `json:"aliases,omitempty"`
 }
 
-func (c *Client) CreateVhost(domain string, aliases []string, phpVersion string) (*Vhost, error) {
+func (c *Client) CreateVhost(domain string, aliases []string, rt VhostRuntime) (*Vhost, error) {
 	var v Vhost
-	if err := c.Post("/v1/vhosts", vhostCreateRequest{Domain: domain, Aliases: aliases, PHPVersion: phpVersion}, &v); err != nil {
+	req := vhostCreateRequest{Domain: domain, Aliases: aliases, PHPVersion: rt.PHPVersion, NodeVersion: rt.NodeVersion, AppEntry: rt.AppEntry}
+	if err := c.Post("/v1/vhosts", req, &v); err != nil {
 		return nil, err
 	}
 	return &v, nil
@@ -50,22 +68,24 @@ func (c *Client) GetVhost(id string) (*Vhost, error) {
 	return &v, nil
 }
 
-// PatchVhost updates domain and/or php_version - apicpd handles a domain
+// PatchVhost updates domain and/or the runtime - apicpd handles a domain
 // change as remove-then-reapply under the new domain, but the vhost's own
-// ID and every other attribute stay the same. Both fields are always sent
+// ID and every other attribute stay the same. Every field is always sent
 // (never nil) since the resource always has a resolved plan value for
 // each by the time Update runs; PATCH is idempotent, so re-sending an
-// unchanged value is a no-op.
+// unchanged value is a no-op. Sending all three runtime fields together is
+// also what lets a vhost move from PHP to Node (or back) in one request.
 //
 // aliases is always sent, and as a list even when empty, because the API replaces the whole list: an
 // empty list is how an alias is removed.
-func (c *Client) PatchVhost(id, domain string, aliases []string, phpVersion string) (*Vhost, error) {
+func (c *Client) PatchVhost(id, domain string, aliases []string, rt VhostRuntime) (*Vhost, error) {
 	var v Vhost
 	if aliases == nil {
 		aliases = []string{}
 	}
 
-	if err := c.Patch("/v1/vhosts/"+id, vhostPatchRequest{Domain: &domain, PHPVersion: &phpVersion, Aliases: &aliases}, &v); err != nil {
+	req := vhostPatchRequest{Domain: &domain, PHPVersion: &rt.PHPVersion, NodeVersion: &rt.NodeVersion, AppEntry: &rt.AppEntry, Aliases: &aliases}
+	if err := c.Patch("/v1/vhosts/"+id, req, &v); err != nil {
 		return nil, err
 	}
 	return &v, nil

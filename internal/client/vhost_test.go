@@ -31,7 +31,7 @@ func capture(t *testing.T, reply string) (*Client, *string) {
 func TestCreateVhostSendsAliases(t *testing.T) {
 	c, last := capture(t, `{"id":"vh_1","domain":"example.test","aliases":["www.example.test"]}`)
 
-	v, err := c.CreateVhost("example.test", []string{"www.example.test"}, "")
+	v, err := c.CreateVhost("example.test", []string{"www.example.test"}, VhostRuntime{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestCreateVhostSendsAliases(t *testing.T) {
 	}
 
 	// none given: the field is left out entirely
-	if _, err := c.CreateVhost("example.test", nil, ""); err != nil {
+	if _, err := c.CreateVhost("example.test", nil, VhostRuntime{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -60,7 +60,7 @@ func TestPatchVhostAlwaysSendsTheAliasList(t *testing.T) {
 	c, last := capture(t, `{"id":"vh_1","domain":"example.test"}`)
 
 	for name, aliases := range map[string][]string{"nil": nil, "empty": {}, "some": {"a.example.test", "b.example.test"}} {
-		if _, err := c.PatchVhost("vh_1", "example.test", aliases, ""); err != nil {
+		if _, err := c.PatchVhost("vh_1", "example.test", aliases, VhostRuntime{}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -90,5 +90,42 @@ func TestCertificateNamesAreRead(t *testing.T) {
 
 	if len(cert.Names) != 2 || cert.Names[1] != "www.example.test" {
 		t.Errorf("names = %v", cert.Names)
+	}
+}
+
+func TestCreateVhostSendsTheNodeRuntimeOnly(t *testing.T) {
+	c, last := capture(t, `{"id":"vh_1","domain":"example.test","node_version":"24","app_port":20001}`)
+
+	v, err := c.CreateVhost("example.test", nil, VhostRuntime{NodeVersion: "24", AppEntry: "server.js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(*last, `"node_version":"24"`) || !strings.Contains(*last, `"app_entry":"server.js"`) || strings.Contains(*last, "php_version") {
+		t.Errorf("request body %s", *last)
+	}
+
+	if v.NodeVersion != "24" || v.AppPort != 20001 {
+		t.Errorf("read back %+v", v)
+	}
+}
+
+// Moving from PHP to Node (or back) is one PATCH that must clear the other runtime explicitly.
+func TestPatchVhostAlwaysSendsEveryRuntimeField(t *testing.T) {
+	c, last := capture(t, `{"id":"vh_1","domain":"example.test"}`)
+
+	if _, err := c.PatchVhost("vh_1", "example.test", nil, VhostRuntime{NodeVersion: "24"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(*last), &body); err != nil {
+		t.Fatal(err)
+	}
+
+	for k, want := range map[string]string{"php_version": "", "node_version": "24", "app_entry": ""} {
+		if got, ok := body[k]; !ok || got != want {
+			t.Errorf("%s = %v (present %v), want %q in %s", k, got, ok, want, *last)
+		}
 	}
 }

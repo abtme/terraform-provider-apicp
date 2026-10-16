@@ -33,6 +33,13 @@ type WebDomainResourceModel struct {
 	Status       types.String `tfsdk:"status"`
 	TLSEnabled   types.Bool   `tfsdk:"tls_enabled"`
 	PHPVersion   types.String `tfsdk:"php_version"`
+	NodeVersion  types.String `tfsdk:"node_version"`
+	AppEntry     types.String `tfsdk:"app_entry"`
+	AppPort      types.Int64  `tfsdk:"app_port"`
+}
+
+func (m *WebDomainResourceModel) runtime() client.VhostRuntime {
+	return client.VhostRuntime{PHPVersion: m.PHPVersion.ValueString(), NodeVersion: m.NodeVersion.ValueString(), AppEntry: m.AppEntry.ValueString()}
 }
 
 func (r *WebDomainResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -83,7 +90,23 @@ func (r *WebDomainResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"php_version": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "PHP-FPM version to serve this domain with: `5.6`, `7.2`, `7.4`, `8.0`, `8.1`, `8.2`, `8.3`, or `8.4`. Omit (or set to `\"\"`) for static content only, the default — apicp never installs a PHP version itself, a domain can only select one already provisioned on its node.",
+				MarkdownDescription: "PHP-FPM version to serve this domain with: `5.6`, `7.2`, `7.4`, `8.0`, `8.1`, `8.2`, `8.3`, or `8.4`. Omit (or set to `\"\"`) for static content only, the default — apicp never installs a PHP version itself, a domain can only select one already provisioned on its node. Cannot be set together with `node_version`.",
+			},
+			"node_version": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Run a Node.js app for this domain instead of static files or PHP: `22` or `24`. apicp runs it as the domain's Unix user from `/home/<unix_user>/app` " +
+					"(deploy it there over SSH, then touch `~/app/restart.txt`), listening on `127.0.0.1:app_port`, and nginx proxies to it. " +
+					"Cannot be set together with `php_version`. Setting it back to `\"\"` (or removing it) stops and removes the app's service; its files stay.",
+			},
+			"app_entry": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "The Node.js app's start file, relative to `~/app`. Omit for `dist/server/entry.mjs`, what Astro's Node adapter (and EmDash) builds.",
+			},
+			"app_port": schema.Int64Attribute{
+				Computed:            true,
+				MarkdownDescription: "The loopback port apicp gave the Node.js app (passed to it as `PORT`); 0 without `node_version`.",
 			},
 		},
 	}
@@ -134,6 +157,9 @@ func (r *WebDomainResource) applyVhost(ctx context.Context, v *client.Vhost, m *
 	m.Status = types.StringValue(v.Status)
 	m.TLSEnabled = types.BoolValue(v.TLSEnabled)
 	m.PHPVersion = types.StringValue(v.PHPVersion)
+	m.NodeVersion = types.StringValue(v.NodeVersion)
+	m.AppEntry = types.StringValue(v.AppEntry)
+	m.AppPort = types.Int64Value(int64(v.AppPort))
 
 	return diags
 }
@@ -151,7 +177,7 @@ func (r *WebDomainResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	v, err := r.client.CreateVhost(plan.Domain.ValueString(), aliases, plan.PHPVersion.ValueString())
+	v, err := r.client.CreateVhost(plan.Domain.ValueString(), aliases, plan.runtime())
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating web domain", err.Error())
 		return
@@ -194,7 +220,7 @@ func (r *WebDomainResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	v, err := r.client.PatchVhost(state.ID.ValueString(), plan.Domain.ValueString(), aliases, plan.PHPVersion.ValueString())
+	v, err := r.client.PatchVhost(state.ID.ValueString(), plan.Domain.ValueString(), aliases, plan.runtime())
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating web domain", err.Error())
 		return
