@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -15,6 +16,13 @@ import (
 
 	"github.com/abtme/terraform-provider-apicp/internal/client"
 )
+
+// accountBackupCreateTimeout bounds how long Create waits for apicp to make
+// the backup. apicpd makes it in a process of its own and is polled; if this
+// runs out, the backup carries on on the server and can be imported once it
+// is made. The provider has no per-resource timeouts block yet, so this is
+// fixed.
+const accountBackupCreateTimeout = 30 * time.Minute
 
 // AccountBackupResource is apicp_account_backup: one point-in-time backup.
 type AccountBackupResource struct{ client *client.Client }
@@ -37,7 +45,7 @@ func (r *AccountBackupResource) Metadata(_ context.Context, req resource.Metadat
 
 func (r *AccountBackupResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Takes one backup of an `apicp_account` - everything it owns (website docroots, mailboxes, database dumps) in a single archive stored on apicp. It is a point-in-time snapshot: applying creates one backup, and a later apply does not take another. To take a fresh one, replace the resource (`terraform apply -replace=...`, or `replace_triggered_by`). Destroying deletes the stored backup. Restoring is an action, not a state, so it is not exposed here - use `POST /v1/accounts/{id}/backups/{backup_id}/restore` on apicp's API.",
+		MarkdownDescription: "Takes one backup of an `apicp_account` - everything it owns (website docroots, mailboxes, database dumps) in a single archive stored on apicp. It is a point-in-time snapshot: applying creates one backup, and a later apply does not take another. apicp makes the backup in a process of its own (apicpd from the account backup process change on); creating waits for it, checking every few seconds, for up to 30 minutes. If that runs out the backup carries on on the server and is not in Terraform state - import it once `GET /v1/accounts/{id}/backups` lists it. If a backup of the same account is already running (started from the CLI, the panel or another resource), creating waits for it to end and then takes a backup of its own, so each resource owns its backup. A backup made whose old one-off backups could not be removed afterwards is kept, with a warning. Older apicpd servers that make the backup within the request work as before. To take a fresh one, replace the resource (`terraform apply -replace=...`, or `replace_triggered_by`). Destroying deletes the stored backup. Restoring is an action, not a state, so it is not exposed here - use `POST /v1/accounts/{id}/backups/{backup_id}/restore` on apicp's API.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -79,12 +87,18 @@ func (r *AccountBackupResource) Create(ctx context.Context, req resource.CreateR
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	b, err := r.client.CreateAccountBackup(plan.AccountID.ValueString())
+	ctx, cancel := context.WithTimeout(ctx, accountBackupCreateTimeout)
+	defer cancel()
+	res, err := r.client.CreateAccountBackup(ctx, plan.AccountID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating account backup", err.Error())
 		return
 	}
-	r.apply(b, &plan)
+	if res.Warning != "" {
+		resp.Diagnostics.AddWarning("Account backup made with a warning",
+			fmt.Sprintf("Backup %s was made, but: %s", res.Backup.ID, res.Warning))
+	}
+	r.apply(res.Backup, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

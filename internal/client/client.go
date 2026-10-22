@@ -10,6 +10,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,18 @@ func New(baseURL, token string) *Client {
 	}
 }
 
+// APIError is a non-2xx, non-404 answer from apicpd. StatusCode lets a
+// caller tell a passing problem (a 5xx while apicpd restarts) from a real
+// refusal.
+type APIError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("apicp API error (%d): %s", e.StatusCode, e.Message)
+}
+
 // errorResponse matches api.httpError's {"error": "..."} shape.
 type errorResponse struct {
 	Error string `json:"error"`
@@ -71,6 +84,14 @@ func (c *Client) redact(s string) string {
 // body at all (matters for endpoints like the certificate issuer, which
 // take no input).
 func (c *Client) request(method, path string, query url.Values, body, target any) error {
+	_, err := c.requestCtx(context.Background(), method, path, query, body, target)
+	return err
+}
+
+// requestCtx is request with a context (cancelling it abandons the call) and
+// the HTTP status code of the answer, for endpoints that mean
+// different things by different 2xx codes.
+func (c *Client) requestCtx(ctx context.Context, method, path string, query url.Values, body, target any) (int, error) {
 	reqURL := c.BaseURL + "/" + strings.TrimLeft(path, "/")
 	if len(query) > 0 {
 		reqURL += "?" + query.Encode()
@@ -81,15 +102,15 @@ func (c *Client) request(method, path string, query url.Values, body, target any
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("encoding request body: %w", err)
+			return 0, fmt.Errorf("encoding request body: %w", err)
 		}
 		bodyReader = bytes.NewReader(b)
 		bodyForLog = string(b)
 	}
 
-	req, err := http.NewRequest(method, reqURL, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
-		return fmt.Errorf("building request: %w", err)
+		return 0, fmt.Errorf("building request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	if body != nil {
@@ -105,13 +126,13 @@ func (c *Client) request(method, path string, query url.Values, body, target any
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, path, err)
+		return 0, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("reading response body: %w", err)
+		return 0, fmt.Errorf("reading response body: %w", err)
 	}
 
 	if debugHTTP() {
@@ -122,22 +143,22 @@ func (c *Client) request(method, path string, query url.Values, body, target any
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return ErrNotFound
+		return resp.StatusCode, ErrNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var e errorResponse
 		if json.Unmarshal(respBody, &e) == nil && e.Error != "" {
-			return fmt.Errorf("apicp API error (%d): %s", resp.StatusCode, e.Error)
+			return resp.StatusCode, &APIError{StatusCode: resp.StatusCode, Message: e.Error}
 		}
-		return fmt.Errorf("apicp API error (%d): %s", resp.StatusCode, string(respBody))
+		return resp.StatusCode, &APIError{StatusCode: resp.StatusCode, Message: string(respBody)}
 	}
 
 	if target != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, target); err != nil {
-			return fmt.Errorf("decoding response: %w (body: %s)", err, respBody)
+			return resp.StatusCode, fmt.Errorf("decoding response: %w (body: %s)", err, respBody)
 		}
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 // Get performs a GET and decodes into target.
