@@ -74,7 +74,7 @@ func (r *PackageResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"max_mailboxes":       packageLimitAttribute(),
 			"max_cron_jobs":       packageLimitAttribute(),
 			"max_sub_accounts":    schemaWithDescription(packageLimitAttribute(), "Only meaningful on a for_tier=\"reseller\" package — how many user accounts that reseller may create."),
-			"max_emails_per_hour": schemaWithDescription(packageLimitAttribute(), "Outgoing mail (recipients) across everything the account sends, over a rolling hour; mail over it is deferred and retried later, not lost. **Unlike the other limits, `0` (the default) means unlimited.**"),
+			"max_emails_per_hour": schemaWithDescription(packageLimitAttribute(), "Outgoing mail (recipients) across everything the account sends, over a rolling hour; mail over it is refused for now (451): a website's mail stays queued and goes out later by itself, a mail program keeps it in its Outbox to send again. **Unlike the other limits, `0` (the default) means unlimited.**"),
 		},
 	}
 }
