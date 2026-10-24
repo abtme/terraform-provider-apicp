@@ -17,6 +17,7 @@ import (
 
 var mailSettingsType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
 	"id": tftypes.String, "max_message_size_mb": tftypes.Number, "default_max_message_size_mb": tftypes.Number,
+	"allow_weak_password_schemes": tftypes.Bool,
 }}
 
 func mailSettingsSchema(t *testing.T) resource.SchemaResponse {
@@ -30,6 +31,10 @@ func mailSettingsSchema(t *testing.T) resource.SchemaResponse {
 }
 
 func mailSettingsValue(id any, size, def any) tftypes.Value {
+	return mailSettingsValueWeak(id, size, def, false)
+}
+
+func mailSettingsValueWeak(id any, size, def any, weak any) tftypes.Value {
 	v := func(ty tftypes.Type, x any) tftypes.Value {
 		if x == "unknown" {
 			return tftypes.NewValue(ty, tftypes.UnknownValue)
@@ -38,12 +43,16 @@ func mailSettingsValue(id any, size, def any) tftypes.Value {
 	}
 	return tftypes.NewValue(mailSettingsType, map[string]tftypes.Value{
 		"id": v(tftypes.String, id), "max_message_size_mb": v(tftypes.Number, size), "default_max_message_size_mb": v(tftypes.Number, def),
+		"allow_weak_password_schemes": v(tftypes.Bool, weak),
 	})
 }
 
-// fakeMailSettings is apicpd's /v1/mail/settings: puts records every PUT body.
+// fakeMailSettings is apicpd's /v1/mail/settings: puts records every PUT body. old = an apicpd from before
+// allow_weak_password_schemes (never returns it).
 type fakeMailSettings struct {
 	size int64
+	weak bool
+	old  bool
 	puts []map[string]any
 }
 
@@ -62,13 +71,20 @@ func (f *fakeMailSettings) server(t *testing.T) *httptest.Server {
 			}
 			f.puts = append(f.puts, body)
 			f.size = int64(body["max_message_size_mb"].(float64))
+			if weak, ok := body["allow_weak_password_schemes"].(bool); ok && !f.old {
+				f.weak = weak
+			}
 		case http.MethodGet:
 		default:
 			t.Errorf("unexpected %s", r.Method)
 		}
+		out := map[string]any{"max_message_size_mb": f.size, "default_max_message_size_mb": 50,
+			"updated_at": "2026-10-24T15:00:00Z", "compression": "zstd"} // a field this provider does not know yet
+		if !f.old {
+			out["allow_weak_password_schemes"] = f.weak
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"max_message_size_mb": f.size, "default_max_message_size_mb": 50,
-			"updated_at": "2026-10-24T15:00:00Z", "compression": "zstd"}) // a field this provider does not know yet
+		_ = json.NewEncoder(w).Encode(out)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -84,28 +100,28 @@ func TestMailSettingsCreateSetsTheSize(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("diagnostics: %v", resp.Diagnostics)
 	}
-	if len(f.puts) != 1 || len(f.puts[0]) != 1 || f.puts[0]["max_message_size_mb"] != float64(0) {
-		t.Fatalf("PUTs = %v, want one with only max_message_size_mb 0 (unlimited)", f.puts)
+	if len(f.puts) != 1 || len(f.puts[0]) != 2 || f.puts[0]["max_message_size_mb"] != float64(0) || f.puts[0]["allow_weak_password_schemes"] != false {
+		t.Fatalf("PUTs = %v, want one with max_message_size_mb 0 (unlimited) and allow_weak_password_schemes false", f.puts)
 	}
 	var got MailSettingsResourceModel
 	resp.State.Get(context.Background(), &got)
-	if got.ID.ValueString() != "mail_settings" || got.MaxMessageSizeMB.ValueInt64() != 0 || got.DefaultMaxMessageSizeMB.ValueInt64() != 50 {
+	if got.ID.ValueString() != "mail_settings" || got.MaxMessageSizeMB.ValueInt64() != 0 || got.DefaultMaxMessageSizeMB.ValueInt64() != 50 || got.AllowWeakPasswordSchemes.ValueBool() {
 		t.Errorf("state = %+v", got)
 	}
 }
 
 func TestMailSettingsDeleteRestoresTheDefault(t *testing.T) {
-	f := &fakeMailSettings{size: 200}
+	f := &fakeMailSettings{size: 200, weak: true}
 	r := &MailSettingsResource{client: client.New(f.server(t).URL, "token")}
 	sch := mailSettingsSchema(t).Schema
 
 	var resp resource.DeleteResponse
-	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: sch, Raw: mailSettingsValue("mail_settings", 200, 50)}}, &resp)
+	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: sch, Raw: mailSettingsValueWeak("mail_settings", 200, 50, true)}}, &resp)
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("diagnostics: %v", resp.Diagnostics)
 	}
-	if len(f.puts) != 1 || f.puts[0]["max_message_size_mb"] != float64(50) {
-		t.Fatalf("PUTs = %v, want the server's default (50)", f.puts)
+	if len(f.puts) != 1 || f.puts[0]["max_message_size_mb"] != float64(50) || f.puts[0]["allow_weak_password_schemes"] != false {
+		t.Fatalf("PUTs = %v, want the server's default size (50) and weak schemes off", f.puts)
 	}
 }
 
@@ -143,6 +159,78 @@ func TestMailSettingsValidateConfig(t *testing.T) {
 			resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: sch, Raw: mailSettingsValue(nil, size, nil)}}, &resp)
 		if got := resp.Diagnostics.HasError(); got != wantErr {
 			t.Errorf("max_message_size_mb %d: error=%v, want %v", size, got, wantErr)
+		}
+	}
+}
+
+func createMailSettings(t *testing.T, f *fakeMailSettings, size int64, weak bool) resource.CreateResponse {
+	t.Helper()
+	r := &MailSettingsResource{client: client.New(f.server(t).URL, "token")}
+	sch := mailSettingsSchema(t).Schema
+	resp := resource.CreateResponse{State: tfsdk.State{Schema: sch, Raw: tftypes.NewValue(mailSettingsType, nil)}}
+	r.Create(context.Background(), resource.CreateRequest{Plan: tfsdk.Plan{Schema: sch, Raw: mailSettingsValueWeak("unknown", size, "unknown", weak)}}, &resp)
+	return resp
+}
+
+func TestMailSettingsPutSendsBothFields(t *testing.T) {
+	f := &fakeMailSettings{size: 50}
+	resp := createMailSettings(t, f, 100, true)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+	if len(f.puts) != 1 || f.puts[0]["max_message_size_mb"] != float64(100) || f.puts[0]["allow_weak_password_schemes"] != true {
+		t.Fatalf("PUTs = %v", f.puts)
+	}
+	var got MailSettingsResourceModel
+	resp.State.Get(context.Background(), &got)
+	if !got.AllowWeakPasswordSchemes.ValueBool() || got.MaxMessageSizeMB.ValueInt64() != 100 {
+		t.Errorf("state = %+v", got)
+	}
+}
+
+func TestMailSettingsReadTakesWeakSchemesFromTheServer(t *testing.T) {
+	f := &fakeMailSettings{size: 60, weak: true} // changed outside Terraform
+	r := &MailSettingsResource{client: client.New(f.server(t).URL, "token")}
+	sch := mailSettingsSchema(t).Schema
+	state := tfsdk.State{Schema: sch, Raw: mailSettingsValue("mail_settings", 50, 50)}
+	resp := resource.ReadResponse{State: state}
+	r.Read(context.Background(), resource.ReadRequest{State: state}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+	var got MailSettingsResourceModel
+	resp.State.Get(context.Background(), &got)
+	if !got.AllowWeakPasswordSchemes.ValueBool() || got.MaxMessageSizeMB.ValueInt64() != 60 {
+		t.Errorf("state = %+v, want the server's values (drift shows in the next plan)", got)
+	}
+}
+
+// An apicpd from before the setting has it off: fine when false is wanted, a clear error when true is.
+func TestMailSettingsWeakSchemesOnAnOldApicpd(t *testing.T) {
+	resp := createMailSettings(t, &fakeMailSettings{old: true, size: 50}, 50, false)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("false on an old apicpd: %v", resp.Diagnostics)
+	}
+	var got MailSettingsResourceModel
+	resp.State.Get(context.Background(), &got)
+	if got.AllowWeakPasswordSchemes.ValueBool() {
+		t.Errorf("state = %+v", got)
+	}
+
+	resp = createMailSettings(t, &fakeMailSettings{old: true, size: 50}, 50, true)
+	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "allow_weak_password_schemes") {
+		t.Fatalf("true on an old apicpd: %v", resp.Diagnostics)
+	}
+
+	f := &fakeMailSettings{old: true, size: 50}
+	r := &MailSettingsResource{client: client.New(f.server(t).URL, "token")}
+	sch := mailSettingsSchema(t).Schema
+	for _, weak := range []bool{false, true} {
+		state := tfsdk.State{Schema: sch, Raw: mailSettingsValueWeak("mail_settings", 50, 50, weak)}
+		rresp := resource.ReadResponse{State: state}
+		r.Read(context.Background(), resource.ReadRequest{State: state}, &rresp)
+		if got := rresp.Diagnostics.HasError(); got != weak {
+			t.Errorf("read with allow_weak_password_schemes=%v on an old apicpd: error=%v (%v)", weak, got, rresp.Diagnostics)
 		}
 	}
 }

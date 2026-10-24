@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -35,9 +36,10 @@ var _ resource.ResourceWithValidateConfig = &MailSettingsResource{}
 func NewMailSettingsResource() resource.Resource { return &MailSettingsResource{} }
 
 type MailSettingsResourceModel struct {
-	ID                      types.String `tfsdk:"id"`
-	MaxMessageSizeMB        types.Int64  `tfsdk:"max_message_size_mb"`
-	DefaultMaxMessageSizeMB types.Int64  `tfsdk:"default_max_message_size_mb"`
+	ID                       types.String `tfsdk:"id"`
+	MaxMessageSizeMB         types.Int64  `tfsdk:"max_message_size_mb"`
+	DefaultMaxMessageSizeMB  types.Int64  `tfsdk:"default_max_message_size_mb"`
+	AllowWeakPasswordSchemes types.Bool   `tfsdk:"allow_weak_password_schemes"`
 }
 
 func (r *MailSettingsResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -46,7 +48,7 @@ func (r *MailSettingsResource) Metadata(_ context.Context, req resource.Metadata
 
 func (r *MailSettingsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The mail server's server-wide settings on apicp's control-plane node. Requires an admin-tier provider token. One per server: declare it once. Destroying it puts apicp's default back (`default_max_message_size_mb`); it never leaves the server without a value. Needs apicp after v0.6.18.",
+		MarkdownDescription: "The mail server's server-wide settings on apicp's control-plane node. Requires an admin-tier provider token. One per server: declare it once. Destroying it puts apicp's defaults back (`default_max_message_size_mb`, weak password schemes off); it never leaves the server without a value. Needs apicp after v0.6.18.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -57,6 +59,13 @@ func (r *MailSettingsResource) Schema(_ context.Context, _ resource.SchemaReques
 				Required: true,
 				MarkdownDescription: fmt.Sprintf("Largest message the mail server accepts, incoming and outgoing (Postfix `message_size_limit`), in MB (1024 × 1024 bytes). `0` = unlimited, otherwise 1 to %d. "+
 					"It is the whole message as sent: attachments grow by about a third when encoded, so 50 MB lets through attachments up to roughly 36 MB. A larger message is refused, so its sender gets a bounce.", maxMessageSizeMBLimit),
+			},
+			"allow_weak_password_schemes": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(false),
+				MarkdownDescription: "Let mailboxes log in with password hashes Dovecot counts as weak (MD5-crypt and the like, kept from an older server by an import, a restore or a hash copy). " +
+					"Off (default `false`), Dovecot 2.4 refuses those logins - \"authentication failed\" with the right password. Applies to every mailbox on the server: turn it off again once those people have new passwords (new passwords are always SHA512-crypt). On Dovecot 2.3 it changes nothing (2.3 accepts them anyway).",
 			},
 			"default_max_message_size_mb": schema.Int64Attribute{
 				Computed:            true,
@@ -91,20 +100,28 @@ func (r *MailSettingsResource) ValidateConfig(ctx context.Context, req resource.
 	}
 }
 
-func (r *MailSettingsResource) apply(st *client.MailSettings, m *MailSettingsResourceModel) {
+// apply copies apicp's answer into m. want is the allow_weak_password_schemes
+// the config asks for: an apicpd without the setting (no field in its
+// answer) has it off, which is only an error when true is wanted.
+func (r *MailSettingsResource) apply(st *client.MailSettings, m *MailSettingsResourceModel, want bool) error {
+	if want && st.AllowWeakPasswordSchemes == nil {
+		return client.ErrWeakPasswordSchemesUnsupported
+	}
 	m.ID = types.StringValue(mailSettingsID)
 	m.MaxMessageSizeMB = types.Int64Value(st.MaxMessageSizeMB)
 	m.DefaultMaxMessageSizeMB = types.Int64Value(st.DefaultMaxMessageSizeMB)
+	m.AllowWeakPasswordSchemes = types.BoolValue(st.WeakPasswordSchemes())
+	return nil
 }
 
-// set PUTs the planned settings and copies apicp's answer into plan.
+// set PUTs the planned settings (both, always) and copies apicp's answer into plan.
 func (r *MailSettingsResource) set(plan *MailSettingsResourceModel) error {
-	st, err := r.client.SetMailSettings(plan.MaxMessageSizeMB.ValueInt64())
+	want := plan.AllowWeakPasswordSchemes.ValueBool()
+	st, err := r.client.SetMailSettings(plan.MaxMessageSizeMB.ValueInt64(), want)
 	if err != nil {
 		return err
 	}
-	r.apply(st, plan)
-	return nil
+	return r.apply(st, plan, want)
 }
 
 func (r *MailSettingsResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -134,7 +151,11 @@ func (r *MailSettingsResource) Read(ctx context.Context, req resource.ReadReques
 		resp.Diagnostics.AddError("Error reading mail settings", err.Error())
 		return
 	}
-	r.apply(st, &state)
+	// The state holds what the config last asked for.
+	if err := r.apply(st, &state, state.AllowWeakPasswordSchemes.ValueBool()); err != nil {
+		resp.Diagnostics.AddError("Error reading mail settings", err.Error())
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -151,15 +172,16 @@ func (r *MailSettingsResource) Update(ctx context.Context, req resource.UpdateRe
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// Delete puts apicp's default back - read from the server, so the
-// provider never carries its own copy of what the default is.
+// Delete puts apicp's defaults back: the default size (read from the
+// server, so the provider never carries its own copy of it) and weak
+// password schemes off.
 func (r *MailSettingsResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	st, err := r.client.GetMailSettings()
 	if err != nil {
 		resp.Diagnostics.AddError("Error resetting mail settings", err.Error())
 		return
 	}
-	if _, err := r.client.SetMailSettings(st.DefaultMaxMessageSizeMB); err != nil {
+	if _, err := r.client.SetMailSettings(st.DefaultMaxMessageSizeMB, false); err != nil {
 		resp.Diagnostics.AddError("Error resetting mail settings", err.Error())
 	}
 }
