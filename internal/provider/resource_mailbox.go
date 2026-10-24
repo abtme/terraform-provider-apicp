@@ -84,7 +84,7 @@ func (r *MailboxResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Optional:            true,
 				Computed:            true,
 				Default:             int64default.StaticInt64(0),
-				MarkdownDescription: "Outgoing mail (recipients) sent with this mailbox's login - mail programs on 587/465 and webmail - over a rolling hour. Mail over it is deferred and retried later, not lost. The mail domain's `max_emails_per_hour` and the account's package limit still apply too; the first one reached defers. `0` (default) = unlimited. Needs apicp after v0.6.18 (an older apicpd is reported as an error when this is set).",
+				MarkdownDescription: "Outgoing mail (recipients) sent with this mailbox's login - mail programs on 587/465 and webmail - over a rolling hour. Mail over it is refused for now (451): a website's mail stays queued and goes out later by itself, a mail program keeps it in its Outbox to send again. The mail domain's `max_emails_per_hour` and the account's package limit still apply too; the first one reached defers. `0` (default) = unlimited. Needs apicp after v0.6.18 (an older apicpd is reported as an error when this is set).",
 			},
 			"status": schema.StringAttribute{Computed: true},
 			"password": schema.StringAttribute{
