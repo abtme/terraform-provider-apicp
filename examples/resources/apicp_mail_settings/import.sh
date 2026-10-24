@@ -1,0 +1,1 @@
+terraform import apicp_mail_settings.this mail_settings

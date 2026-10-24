@@ -1,6 +1,9 @@
 package client
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // MailDomain mirrors apicp's internal/mail.MailDomain JSON shape.
 type MailDomain struct {
@@ -69,20 +72,28 @@ type Mailbox struct {
 	LocalPart    string `json:"local_part"`
 	Email        string `json:"email"`
 	Protocols
-	Status   string `json:"status"`
-	Error    string `json:"error,omitempty"`
-	Password string `json:"password,omitempty"` // only populated by Create/ResetMailboxPassword's response
+	// MaxEmailsPerHour is nil when apicpd predates per-mailbox sending
+	// limits (it does not return the field at all) - see ErrMailboxTooOld.
+	MaxEmailsPerHour *int64 `json:"max_emails_per_hour,omitempty"`
+	Status           string `json:"status"`
+	Error            string `json:"error,omitempty"`
+	Password         string `json:"password,omitempty"` // only populated by Create/ResetMailboxPassword's response
 }
+
+// ErrMailboxTooOld is the error for a mailbox sending limit set against an
+// apicpd that does not know the field (it ignores it silently).
+var ErrMailboxTooOld = errors.New("this apicpd does not support per-mailbox sending limits (max_emails_per_hour needs the release after v0.6.18) - upgrade apicp, or leave max_emails_per_hour at 0")
 
 type mailboxCreateRequest struct {
 	LocalPart string `json:"local_part"`
 	Protocols
+	MaxEmailsPerHour int64 `json:"max_emails_per_hour,omitempty"`
 }
 
-func (c *Client) CreateMailbox(mailDomainID, localPart string, p Protocols) (*Mailbox, error) {
+func (c *Client) CreateMailbox(mailDomainID, localPart string, p Protocols, maxEmailsPerHour int64) (*Mailbox, error) {
 	var m Mailbox
 	path := fmt.Sprintf("/v1/mail/domains/%s/mailboxes", mailDomainID)
-	if err := c.Post(path, mailboxCreateRequest{LocalPart: localPart, Protocols: p}, &m); err != nil {
+	if err := c.Post(path, mailboxCreateRequest{LocalPart: localPart, Protocols: p, MaxEmailsPerHour: maxEmailsPerHour}, &m); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -97,12 +108,21 @@ func (c *Client) GetMailbox(mailDomainID, id string) (*Mailbox, error) {
 	return &m, nil
 }
 
-// SetMailboxProtocols implements PATCH .../mailboxes/{id} with the
-// protocol switches set - which changes only them (no password reset).
-func (c *Client) SetMailboxProtocols(mailDomainID, id string, p Protocols) (*Mailbox, error) {
+// mailboxUpdateRequest always carries both protocol switches: apicpd
+// treats a PATCH body with no field it knows as a password reset, and one
+// that predates max_emails_per_hour would see a limit-only body that way.
+type mailboxUpdateRequest struct {
+	Protocols
+	MaxEmailsPerHour int64 `json:"max_emails_per_hour"`
+}
+
+// UpdateMailbox implements PATCH .../mailboxes/{id} with the protocol
+// switches and the sending limit set - which changes only them (no
+// password reset).
+func (c *Client) UpdateMailbox(mailDomainID, id string, p Protocols, maxEmailsPerHour int64) (*Mailbox, error) {
 	var m Mailbox
 	path := fmt.Sprintf("/v1/mail/domains/%s/mailboxes/%s", mailDomainID, id)
-	if err := c.Patch(path, p, &m); err != nil {
+	if err := c.Patch(path, mailboxUpdateRequest{Protocols: p, MaxEmailsPerHour: maxEmailsPerHour}, &m); err != nil {
 		return nil, err
 	}
 	return &m, nil

@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -19,6 +20,7 @@ import (
 
 var _ resource.Resource = &MailboxResource{}
 var _ resource.ResourceWithImportState = &MailboxResource{}
+var _ resource.ResourceWithValidateConfig = &MailboxResource{}
 
 func NewMailboxResource() resource.Resource { return &MailboxResource{} }
 
@@ -31,6 +33,7 @@ type MailboxResourceModel struct {
 	Email        types.String `tfsdk:"email"`
 	DisableIMAP  types.Bool   `tfsdk:"disable_imap"`
 	DisablePOP3  types.Bool   `tfsdk:"disable_pop3"`
+	MaxPerHour   types.Int64  `tfsdk:"max_emails_per_hour"`
 	Status       types.String `tfsdk:"status"`
 	Password     types.String `tfsdk:"password"`
 }
@@ -77,6 +80,12 @@ func (r *MailboxResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				Default:             booldefault.StaticBool(false),
 				MarkdownDescription: "Switch POP3 off for this mailbox. Also off if the mail domain's `disable_pop3` is set. Mail is still delivered. Default `false`.",
 			},
+			"max_emails_per_hour": schema.Int64Attribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             int64default.StaticInt64(0),
+				MarkdownDescription: "Outgoing mail (recipients) sent with this mailbox's login - mail programs on 587/465 and webmail - over a rolling hour. Mail over it is deferred and retried later, not lost. The mail domain's `max_emails_per_hour` and the account's package limit still apply too; the first one reached defers. `0` (default) = unlimited. Needs apicp after v0.6.18 (an older apicpd is reported as an error when this is set).",
+			},
 			"status": schema.StringAttribute{Computed: true},
 			"password": schema.StringAttribute{
 				Computed:            true,
@@ -110,7 +119,36 @@ func (r *MailboxResource) applyMailbox(mbox *client.Mailbox, m *MailboxResourceM
 	m.Email = types.StringValue(mbox.Email)
 	m.DisableIMAP = types.BoolValue(mbox.DisableIMAP)
 	m.DisablePOP3 = types.BoolValue(mbox.DisablePOP3)
+	// An apicpd without per-mailbox limits returns no field: it has none,
+	// which is unlimited.
+	var limit int64
+	if mbox.MaxEmailsPerHour != nil {
+		limit = *mbox.MaxEmailsPerHour
+	}
+	m.MaxPerHour = types.Int64Value(limit)
 	m.Status = types.StringValue(mbox.Status)
+}
+
+// checkLimitApplied reports an apicpd that silently ignored a planned
+// sending limit because it does not know the field.
+func checkLimitApplied(mbox *client.Mailbox, want int64) error {
+	if want != 0 && mbox.MaxEmailsPerHour == nil {
+		return client.ErrMailboxTooOld
+	}
+	return nil
+}
+
+// ValidateConfig - a negative limit is refused by apicp anyway; catch it at plan time.
+func (r *MailboxResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var limit types.Int64
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("max_emails_per_hour"), &limit)...)
+	if resp.Diagnostics.HasError() || limit.IsNull() || limit.IsUnknown() {
+		return
+	}
+	if limit.ValueInt64() < 0 {
+		resp.Diagnostics.AddAttributeError(path.Root("max_emails_per_hour"), "Invalid sending limit",
+			"max_emails_per_hour must be 0 (unlimited) or more.")
+	}
 }
 
 func (r *MailboxResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -120,8 +158,20 @@ func (r *MailboxResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	mbox, err := r.client.CreateMailbox(plan.MailDomainID.ValueString(), plan.LocalPart.ValueString(), plan.protocols())
+	mbox, err := r.client.CreateMailbox(plan.MailDomainID.ValueString(), plan.LocalPart.ValueString(), plan.protocols(), plan.MaxPerHour.ValueInt64())
 	if err != nil {
+		resp.Diagnostics.AddError("Error creating mailbox", err.Error())
+		return
+	}
+	if err := checkLimitApplied(mbox, plan.MaxPerHour.ValueInt64()); err != nil {
+		// apicpd made the mailbox without the limit. Remove it again (it is
+		// new and empty) and keep nothing in state: saving it and failing
+		// would taint it, and the next apply would replace it - a mailbox
+		// that by then may hold mail.
+		if delErr := r.client.DeleteMailbox(plan.MailDomainID.ValueString(), mbox.ID); delErr != nil {
+			resp.Diagnostics.AddError("Error creating mailbox", fmt.Sprintf("%s; removing the mailbox it made (%s) also failed: %s", err, mbox.Email, delErr))
+			return
+		}
 		resp.Diagnostics.AddError("Error creating mailbox", err.Error())
 		return
 	}
@@ -151,7 +201,9 @@ func (r *MailboxResource) Read(ctx context.Context, req resource.ReadRequest, re
 }
 
 // Update - everything else requires replace, so only the protocol switches
-// change here (a switch-only PATCH, which never resets the password).
+// and the sending limit change here. The PATCH always carries both
+// switches, so it never resets the password - not even on an apicpd that
+// does not know max_emails_per_hour.
 func (r *MailboxResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state MailboxResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -159,14 +211,20 @@ func (r *MailboxResource) Update(ctx context.Context, req resource.UpdateRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	mbox, err := r.client.SetMailboxProtocols(state.MailDomainID.ValueString(), state.ID.ValueString(), plan.protocols())
+	mbox, err := r.client.UpdateMailbox(state.MailDomainID.ValueString(), state.ID.ValueString(), plan.protocols(), plan.MaxPerHour.ValueInt64())
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating mailbox", err.Error())
 		return
 	}
+	limitErr := checkLimitApplied(mbox, plan.MaxPerHour.ValueInt64())
 	r.applyMailbox(mbox, &plan)
 	plan.Password = state.Password
+	// On a too-old apicpd the state records what it really has (switches
+	// applied, no limit), so the next plan shows the limit again.
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	if limitErr != nil {
+		resp.Diagnostics.AddError("Error updating mailbox", limitErr.Error())
+	}
 }
 
 func (r *MailboxResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

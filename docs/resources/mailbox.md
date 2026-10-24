@@ -22,6 +22,13 @@ resource "apicp_mailbox" "info" {
   local_part     = "info"
 }
 
+# A mailbox that may send at most 200 recipients an hour with its login (0 = unlimited, the default).
+resource "apicp_mailbox" "newsletter" {
+  mail_domain_id      = apicp_mail_domain.example.id
+  local_part          = "newsletter"
+  max_emails_per_hour = 200
+}
+
 output "info_mailbox_password" {
   value     = apicp_mailbox.info.password
   sensitive = true
@@ -40,6 +47,7 @@ output "info_mailbox_password" {
 
 - `disable_imap` (Boolean) Switch IMAP off for this mailbox (webmail uses IMAP, so it stops too). Also off if the mail domain's `disable_imap` is set. Mail is still delivered. Default `false`.
 - `disable_pop3` (Boolean) Switch POP3 off for this mailbox. Also off if the mail domain's `disable_pop3` is set. Mail is still delivered. Default `false`.
+- `max_emails_per_hour` (Number) Outgoing mail (recipients) sent with this mailbox's login - mail programs on 587/465 and webmail - over a rolling hour. Mail over it is deferred and retried later, not lost. The mail domain's `max_emails_per_hour` and the account's package limit still apply too; the first one reached defers. `0` (default) = unlimited. Needs apicp after v0.6.18 (an older apicpd is reported as an error when this is set).
 
 ### Read-Only
 
