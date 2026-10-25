@@ -83,7 +83,9 @@ func mailDomainCreate(t *testing.T, f *fakeRelayAPI, relay any) (resource.Create
 	r := &MailDomainResource{client: f.client(t)}
 	sch := resourceSchema(t, r)
 	vals := map[string]any{"id": unknownValue{}, "name": "a.example", "unix_user": unknownValue{}, "disable_imap": false, "disable_pop3": false,
-		"max_emails_per_hour": 0, "status": unknownValue{}, "relay_id": relay}
+		"max_emails_per_hour": 0, "status": unknownValue{}, "relay_id": relay,
+		// compression's defaults, as Terraform puts them in the plan
+		"compression": "off", "compression_level": 0, "compressed_mail": unknownValue{}}
 	resp := resource.CreateResponse{State: nullState(tfsdk.State{Schema: sch})}
 	r.Create(context.Background(), resource.CreateRequest{Plan: tfsdk.Plan{Schema: sch, Raw: objectValue(t, sch, vals)}}, &resp)
 	var got MailDomainResourceModel
@@ -122,7 +124,7 @@ func mailDomainUpdate(t *testing.T, f *fakeRelayAPI, from string, to any) (resou
 	r := &MailDomainResource{client: f.client(t)}
 	sch := resourceSchema(t, r)
 	base := map[string]any{"id": "mdom_1", "name": "a.example", "unix_user": "ml_a", "disable_imap": false, "disable_pop3": false,
-		"max_emails_per_hour": 10, "status": "active"}
+		"max_emails_per_hour": 10, "status": "active", "compression": "off", "compression_level": 0, "compressed_mail": false}
 	state, plan := map[string]any{"relay_id": from}, map[string]any{"relay_id": to, "status": unknownValue{}}
 	for k, v := range base {
 		state[k] = v

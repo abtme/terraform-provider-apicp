@@ -33,6 +33,24 @@ func TestMailDomainRelayIsSentOnlyWhenSet(t *testing.T) {
 	}
 }
 
+// A relay and a compression setting in the same request are both sent.
+func TestMailDomainRelayAndCompressionTogether(t *testing.T) {
+	c, last := capture(t, `{"id":"mdom_1","name":"a.example","relay_id":"relay_1","compression":"zstd","compression_level":0}`)
+	if _, err := c.CreateMailDomain("a.example", Protocols{}, 0, "relay_1", &Compression{Method: "zstd"}); err != nil {
+		t.Fatal(err)
+	}
+	if *last != `{"name":"a.example","disable_imap":false,"disable_pop3":false,"max_emails_per_hour":0,"relay_id":"relay_1","compression":"zstd","compression_level":0}` {
+		t.Errorf("create: %s", *last)
+	}
+	relay := "relay_1"
+	if _, err := c.UpdateMailDomain("mdom_1", Protocols{}, 5, &relay, &Compression{Method: "zstd"}); err != nil {
+		t.Fatal(err)
+	}
+	if *last != `{"disable_imap":false,"disable_pop3":false,"max_emails_per_hour":5,"relay_id":"relay_1","compression":"zstd","compression_level":0}` {
+		t.Errorf("update: %s", *last)
+	}
+}
+
 func TestCreateRelayBody(t *testing.T) {
 	c, last := capture(t, `{"id":"relay_1"}`)
 	if _, err := c.CreateRelay("node-1", SMTPRelayCreate{Name: "lan", Host: "relay.lan", Port: 25}); err != nil {

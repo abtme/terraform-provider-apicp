@@ -18,8 +18,8 @@ import (
 var mailDomainType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
 	"id": tftypes.String, "name": tftypes.String, "unix_user": tftypes.String,
 	"disable_imap": tftypes.Bool, "disable_pop3": tftypes.Bool, "max_emails_per_hour": tftypes.Number,
-	"compression": tftypes.String, "compression_level": tftypes.Number, "compressed_mail": tftypes.Bool,
-	"status": tftypes.String,
+	"relay_id": tftypes.String, "compression": tftypes.String, "compression_level": tftypes.Number,
+	"compressed_mail": tftypes.Bool, "status": tftypes.String,
 }}
 
 func mailDomainSchema(t *testing.T) resource.SchemaResponse {
@@ -40,17 +40,17 @@ func mailDomainValue(id string, limit int64, comp string, level int64) tftypes.V
 		}
 		return tftypes.NewValue(tftypes.String, v)
 	}
-	user, status := "ml_examplecom", "active"
+	user, status, relay := "ml_examplecom", "active", ""
 	compressed := tftypes.NewValue(tftypes.Bool, false)
 	if id == "unknown" {
-		user, status = "unknown", "unknown"
+		user, status, relay = "unknown", "unknown", "unknown"
 		compressed = tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue)
 	}
 	return tftypes.NewValue(mailDomainType, map[string]tftypes.Value{
 		"id": s(id), "name": s("example.com"), "unix_user": s(user),
 		"disable_imap": tftypes.NewValue(tftypes.Bool, false), "disable_pop3": tftypes.NewValue(tftypes.Bool, false),
 		"max_emails_per_hour": tftypes.NewValue(tftypes.Number, limit),
-		"compression":         s(comp), "compression_level": tftypes.NewValue(tftypes.Number, level),
+		"relay_id":            s(relay), "compression": s(comp), "compression_level": tftypes.NewValue(tftypes.Number, level),
 		"compressed_mail": compressed, "status": s(status),
 	})
 }
