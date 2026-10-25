@@ -7,13 +7,23 @@ The backup changes below need apicp v0.7.0 or later; the relay changes need v0.8
 ### apicp_mail_relay (new)
 
 - One outbound relay (smart host) of a node: `node_id`, `name`, `host`, `port`, optional `username`/`password`
-  (together or neither; the password is write-only, as on `apicp_smtp_relay`), `default` (default `false`).
-  apicp v0.8.0 lets a node have several relays: the default one carries all outgoing mail, and a mail domain whose
-  `relay_id` names another relay sends through that one (mail whose envelope sender is in the domain; bounces and
-  every other sender use the default).
+  (together or neither; write-only, as on `apicp_smtp_relay`), `default`, `skip_check`. apicp v0.8.0 lets a node
+  have several relays: the default one carries all outgoing mail, and a mail domain whose `relay_id` names another
+  relay sends through that one (mail whose envelope sender is in the domain; bounces and every other sender use the
+  default).
+- All relays of a node share Postfix's one TLS setting, so a relay a mail domain uses has no login and is not on
+  port 465 (apicp refuses it; logins stay possible on the default relay).
+- A node with relays always has exactly one default, and its first relay is it. `default` left out shows what apicp
+  has; `default = false` on the node's first relay is an error after apply (the relay is saved and in state), and
+  apicp refuses `false` on the default relay. To move the default, set `default = true` on another relay.
+- apicp connects to a relay from the node before saving it (an SMTP greeting and STARTTLS); `skip_check = true`
+  saves one that is not reachable yet.
 - Every update sends all arguments, the password included: apicp only sends a stored password to the host and port
-  it was given for, so a new host or port needs it again.
-- Deleting a relay that mail domains use fails with apicp's answer naming them (409).
+  it was given for, so a new host or port needs it again. `default` is only sent when set.
+- Deleting fails with apicp's answer (409) while mail domains use the relay, for the node's only relay, and for the
+  default while other relays exist. So destroying every relay of a node with this resource stops at the last one:
+  remove it with `apicp_smtp_relay`'s destroy (apicp's single-relay DELETE, the one call that removes the last
+  relay) or `terraform state rm`.
 - Import: `node_id/relay_id`.
 - On an apicpd before v0.8.0 creating one is an error saying so.
 
@@ -22,15 +32,18 @@ The backup changes below need apicp v0.7.0 or later; the relay changes need v0.8
 - New optional `relay_id`: the relay the domain's outgoing mail goes through (`""` = the server's default relay).
   Left out, the relay is left as it is on the server and the state shows the server's value (like
   `apicp_database.vhost_id`). Only sent when set (create) or changed (update), so configurations without it keep
-  working on older apicpd. Setting it needs an admin account's token.
+  working on older apicpd. Setting it needs an admin account's token; the relay must have no login and not be on
+  465, unless it is the default relay itself.
 - On an apicpd before v0.8.0 (which ignores the field) a `relay_id` is an error naming the version; a domain created
   that way is kept in state, so Terraform replaces it on the next apply.
 
 ### apicp_smtp_relay
 
-- Documented as the node's default relay. It keeps working unchanged against apicp v0.8.0 (the single-relay routes
-  are the default relay there). Do not also manage the same node's default with an `apicp_mail_relay` that has
-  `default = true`. Removing it is refused while mail domains name the default relay by its ID.
+- Documented as the node's default relay. It keeps working against apicp v0.8.0 (the single-relay routes are the
+  default relay there). New optional `skip_check` (apicp v0.8.0 connects to a relay before saving it; older apicpd
+  ignores the field). Destroying it still removes the node's last relay; it is refused while mail domains name the
+  default relay or the node has other relays. Do not also manage the same node's default with an
+  `apicp_mail_relay`.
 
 ### apicp_account_backup
 
