@@ -119,7 +119,7 @@ func (r *DatabaseResource) Create(ctx context.Context, req resource.CreateReques
 	}
 	d, err := r.client.CreateDatabase(plan.Engine.ValueString(), plan.Name.ValueString(), want)
 	if err != nil {
-		resp.Diagnostics.AddError("Error creating database", err.Error())
+		resp.Diagnostics.AddError("Error creating database", errorDetail(err))
 		return
 	}
 	r.applyDatabase(d, &plan)
@@ -185,6 +185,9 @@ func (r *DatabaseResource) Update(ctx context.Context, req resource.UpdateReques
 
 // databaseLinkError explains a refused PATCH /v1/databases/{id}.
 func databaseLinkError(err error) string {
+	if d, ok := unknownFieldDetail(err); ok {
+		return d
+	}
 	var ae *client.APIError
 	if errors.As(err, &ae) && ae.StatusCode == http.StatusMethodNotAllowed {
 		return "This apicpd cannot link databases to websites (PATCH /v1/databases/{id} answered 405); apicp v0.7.0 or later can. Upgrade apicp, or leave vhost_id out. (" + err.Error() + ")"

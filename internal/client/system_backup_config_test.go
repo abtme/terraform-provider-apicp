@@ -46,3 +46,21 @@ func TestSetSystemBackupConfigSendsEverySettingAndOmitsDefaults(t *testing.T) {
 		}
 	}
 }
+
+// The PUT body (apicpd without PATCH, and apicp v0.7.0 refuses unknown
+// fields on PUT too) holds only the settings PUT knows, never a value GET
+// computes (encryption_available, next_run_at, backup_unit, verify, ...).
+func TestSetSystemBackupConfigSendsOnlyKnownFields(t *testing.T) {
+	c, last := capture(t, `{"enabled":true,"destination":"local"}`)
+	yes, no := true, false
+	if _, err := c.SetSystemBackupConfig(SystemBackupConfigInput{
+		Enabled: true, Destination: "local", Retention: 3, Format: "targz", Compress: &yes, Encrypt: &no,
+		ScheduleTime: "03:30", ScheduleDays: []string{"mon"}, Timezone: "UTC",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"enabled":true,"destination":"local","retention":3,"format":"targz","compress":true,"encrypt":false,"schedule_time":"03:30","schedule_days":["mon"],"timezone":"UTC"}`
+	if *last != want {
+		t.Errorf("body = %s\nwant   %s", *last, want)
+	}
+}

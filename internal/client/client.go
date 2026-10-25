@@ -197,3 +197,24 @@ func (c *Client) Delete(path string) error {
 func (c *Client) DeleteWithBody(path string, body any) error {
 	return c.request(http.MethodDelete, path, nil, body, nil)
 }
+
+// UnknownField reports the request field apicpd refused as unknown, when err
+// is such a refusal: from apicp v0.7.0 the backup settings and database
+// endpoints answer 422 `unknown field "<name>": apicpd <version> does not
+// know it ...; nothing was changed` instead of ignoring a field they do not
+// know (a client newer than the server).
+func UnknownField(err error) (string, bool) {
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.StatusCode != http.StatusUnprocessableEntity {
+		return "", false
+	}
+	rest, ok := strings.CutPrefix(ae.Message, `unknown field "`)
+	if !ok {
+		return "", false
+	}
+	name, _, ok := strings.Cut(rest, `"`)
+	if !ok || name == "" {
+		return "", false
+	}
+	return name, true
+}

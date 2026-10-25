@@ -60,7 +60,8 @@ func (r *SystemBackupConfigResource) Schema(_ context.Context, _ resource.Schema
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, how they are written (format, compression, encryption), whether they are split per domain and whether each run is checked by reading it back. The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (`/v1/system/backup-sftp`, `/v1/system/backup-encryption`), not in Terraform state.\n\n" +
 			"**Only the arguments you set are managed.** On apicp v0.7.0 or later the provider changes settings with `PATCH /v1/system/backup-config` and sends only `enabled`, `destination` and the optional arguments set in the configuration; anything left out keeps the value saved on the server (set in the panel or with `apicp backup configure`). Removing an optional argument from the configuration puts that setting back to the server's default. The provider never writes back values it read: apicp shows effective values, and saving one as an explicit choice (for example `encrypt = false` read while the server had no key yet) would keep it after the default changes. `encryption_warning` says when backups are written unencrypted although the server has a key.\n\n" +
-			"Older apicpd has no PATCH: the provider then replaces the whole config with `PUT` as before - every optional argument left out goes back to the server's default, `retention` (when left out) keeps the server's value, and `backup_unit` / `verify` are refused.",
+			"Older apicpd has no PATCH: the provider then replaces the whole config with `PUT` as before - every optional argument left out goes back to the server's default, `retention` (when left out) keeps the server's value, and `backup_unit` / `verify` are refused.\n\n" +
+			"apicp v0.7.0 and later refuse a setting they do not know (a provider newer than the server) instead of ignoring it: applying is then an error naming the argument, and nothing is changed.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:      true,
@@ -98,7 +99,7 @@ func (r *SystemBackupConfigResource) Schema(_ context.Context, _ resource.Schema
 			},
 			"verify": schema.BoolAttribute{
 				Optional:            true,
-				MarkdownDescription: "The restore check after each scheduled run (the server's default is on): every archive is read back, decrypted, its manifest parsed and every member read to the end; a failed check fails the run, so older runs are not pruned. Over SFTP it transfers everything twice. Omit to keep the server's setting. Needs apicp v0.7.0 or later.",
+				MarkdownDescription: "The restore check after each backup run, scheduled or one-off (`apicp_account_backup` shows it per archive); the server's default is on. Every archive is read back, decrypted, its manifest parsed and every member read to the end; a failed check fails the run, so older backups are not pruned. Over SFTP it transfers everything twice. Omit to keep the server's setting. Needs apicp v0.7.0 or later.",
 			},
 			"encryption_warning": schema.StringAttribute{
 				Computed:            true,
@@ -252,7 +253,7 @@ func (r *SystemBackupConfigResource) Delete(ctx context.Context, req resource.De
 		_, err = r.client.SetSystemBackupConfig(putInput(ctx, &state, false, int(state.Retention.ValueInt64()), &resp.Diagnostics))
 	}
 	if err != nil {
-		resp.Diagnostics.AddError("Error disabling system backup config", err.Error())
+		resp.Diagnostics.AddError("Error disabling system backup config", errorDetail(err))
 	}
 }
 
@@ -276,7 +277,7 @@ func (r *SystemBackupConfigResource) write(ctx context.Context, config, prior *S
 		}
 	}
 	if err != nil {
-		diags.AddError("Error setting system backup config", err.Error())
+		diags.AddError("Error setting system backup config", errorDetail(err))
 		return nil
 	}
 	if cfg.EncryptionWarning != "" && !(known(config.Encrypt) && !config.Encrypt.ValueBool()) {

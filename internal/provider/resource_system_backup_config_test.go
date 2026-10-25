@@ -24,6 +24,7 @@ type fakeBackupConfig struct {
 	patches []map[string]any
 	puts    []map[string]any
 	gets    int
+	refuse  string // a field this apicpd does not know: a write sending it gets apicp v0.7.0's 422
 }
 
 func (f *fakeBackupConfig) client(t *testing.T) *client.Client {
@@ -61,6 +62,11 @@ func (f *fakeBackupConfig) client(t *testing.T) *client.Client {
 			f.puts = append(f.puts, body)
 		default:
 			t.Errorf("unexpected %s", r.Method)
+		}
+		if _, has := body[f.refuse]; has && f.refuse != "" {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"error":"unknown field \"` + f.refuse + `\": apicpd 0.7.0 does not know it (is the client newer than this server?); nothing was changed"}`))
+			return
 		}
 		for k, v := range body {
 			if v != nil {
@@ -270,6 +276,70 @@ func TestSystemBackupConfigDeleteOnlyDisables(t *testing.T) {
 		}
 		if old && (len(f.puts) != 1 || f.puts[0]["enabled"] != false || f.puts[0]["destination"] != "sftp" || f.puts[0]["retention"] != float64(7)) {
 			t.Errorf("old apicpd: PUTs %v, want the state's settings with enabled false", f.puts)
+		}
+	}
+}
+
+// apicp v0.7.0 refuses a field it does not know with 422: a clear error
+// naming the argument, and no PUT fallback.
+func TestSystemBackupConfigUnknownFieldIsAClearError(t *testing.T) {
+	f := &fakeBackupConfig{refuse: "verify"}
+	resp, _ := backupConfigCreate(t, f, map[string]any{"enabled": true, "destination": "local", "verify": true})
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("want an error")
+	}
+	d := resp.Diagnostics.Errors()[0].Detail()
+	if !strings.Contains(d, `does not support "verify"`) || !strings.Contains(d, "remove the verify argument") || !strings.Contains(d, "Upgrade apicpd") {
+		t.Errorf("detail = %s", d)
+	}
+	if len(f.puts) != 0 {
+		t.Errorf("a 422 must not fall back to PUT: %v", f.puts)
+	}
+}
+
+// The PUT fallback sends exactly the settings PUT knows and the
+// configuration sets: nothing GET computes, never backup_unit or verify.
+func TestSystemBackupConfigPutBodyIsExact(t *testing.T) {
+	f := &fakeBackupConfig{old: true}
+	resp, _ := backupConfigCreate(t, f, map[string]any{"enabled": true, "destination": "local", "retention": int64(4),
+		"format": "zip", "compress": true, "encrypt": false, "schedule_time": "03:30", "schedule_days": []string{"mon"}, "timezone": "Europe/London"})
+	if resp.Diagnostics.HasError() || len(f.puts) != 1 {
+		t.Fatalf("diagnostics %v, PUTs %v", resp.Diagnostics, f.puts)
+	}
+	got, _ := json.Marshal(f.puts[0])
+	want := `{"compress":true,"destination":"local","enabled":true,"encrypt":false,"format":"zip","retention":4,"schedule_days":["mon"],"schedule_time":"03:30","timezone":"Europe/London"}`
+	if string(got) != want {
+		t.Errorf("PUT body = %s\nwant       %s", got, want)
+	}
+
+	// nothing optional set: enabled, destination and the server's retention only
+	f = &fakeBackupConfig{old: true}
+	if resp, _ = backupConfigCreate(t, f, map[string]any{"enabled": false, "destination": "local"}); resp.Diagnostics.HasError() {
+		t.Fatal(resp.Diagnostics)
+	}
+	got, _ = json.Marshal(f.puts[0])
+	if string(got) != `{"destination":"local","enabled":false,"retention":3}` {
+		t.Errorf("PUT body = %s", got)
+	}
+}
+
+// Every key the provider can PATCH is one apicp knows.
+func TestSystemBackupConfigPatchBodyHasOnlyKnownFields(t *testing.T) {
+	known := map[string]bool{"enabled": true, "destination": true, "retention": true, "format": true, "compress": true, "encrypt": true,
+		"backup_unit": true, "verify": true, "schedule_time": true, "schedule_days": true, "timezone": true}
+	f := &fakeBackupConfig{}
+	resp, _ := backupConfigCreate(t, f, map[string]any{"enabled": true, "destination": "local", "retention": int64(4),
+		"format": "zip", "compress": true, "encrypt": true, "schedule_time": "03:30", "schedule_days": []string{"mon"},
+		"timezone": "Europe/London", "backup_unit": "account", "verify": true})
+	if resp.Diagnostics.HasError() || len(f.patches) != 1 {
+		t.Fatalf("diagnostics %v, PATCHes %v", resp.Diagnostics, f.patches)
+	}
+	if len(f.patches[0]) != len(known) {
+		t.Errorf("PATCH keys = %v, want all %d known settings", keys(f.patches[0]), len(known))
+	}
+	for k := range f.patches[0] {
+		if !known[k] {
+			t.Errorf("PATCH sends %q, which apicp does not know", k)
 		}
 	}
 }

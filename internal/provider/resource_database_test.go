@@ -21,6 +21,7 @@ type fakeDatabases struct {
 	vhost   string
 	creates []map[string]any
 	patches []map[string]any
+	refuse  string // a field this apicpd does not know: a request sending it gets apicp v0.7.0's 422
 }
 
 func (f *fakeDatabases) client(t *testing.T) *client.Client {
@@ -28,6 +29,17 @@ func (f *fakeDatabases) client(t *testing.T) *client.Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		w.Header().Set("Content-Type", "application/json")
+		if f.refuse != "" && r.Method != http.MethodGet {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if _, has := body[f.refuse]; has {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"error":"unknown field \"` + f.refuse + `\": apicpd 0.7.0 does not know it (is the client newer than this server?); nothing was changed"}`))
+				return
+			}
+			t.Errorf("refuse is only for requests that send %s", f.refuse)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/databases":
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -162,5 +174,38 @@ func TestDatabaseUpdateOnAnOldApicpd(t *testing.T) {
 	resp := databaseUpdate(t, &fakeDatabases{old: true}, "", "vh_1")
 	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "v0.7.0") {
 		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+}
+
+// The create body is exactly engine and name (and vhost_id when set).
+func TestDatabaseCreateBodyIsExact(t *testing.T) {
+	for vhost, want := range map[any]string{"vh_1": `{"engine":"mysql","name":"shop","vhost_id":"vh_1"}`, unknownValue{}: `{"engine":"mysql","name":"shop"}`} {
+		f := &fakeDatabases{}
+		if resp, _ := databaseCreate(t, f, vhost); resp.Diagnostics.HasError() {
+			t.Fatal(resp.Diagnostics)
+		}
+		got, _ := json.Marshal(f.creates[0])
+		if string(got) != want {
+			t.Errorf("vhost %v: body %s, want %s", vhost, got, want)
+		}
+	}
+	f := &fakeDatabases{}
+	databaseUpdate(t, f, "vh_1", "")
+	if got, _ := json.Marshal(f.patches); string(got) != `[{"vhost_id":""}]` {
+		t.Errorf("PATCH bodies %s", got)
+	}
+}
+
+// apicp v0.7.0's 422 for a field it does not know reads as such, on create
+// and on update (not as "a website of another account").
+func TestDatabaseUnknownFieldIsAClearError(t *testing.T) {
+	resp, _ := databaseCreate(t, &fakeDatabases{refuse: "vhost_id"}, "vh_1")
+	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), `does not support "vhost_id"`) {
+		t.Errorf("create: %v", resp.Diagnostics)
+	}
+	uresp := databaseUpdate(t, &fakeDatabases{refuse: "vhost_id"}, "", "vh_1")
+	if !uresp.Diagnostics.HasError() || !strings.Contains(uresp.Diagnostics.Errors()[0].Detail(), "remove the vhost_id argument") ||
+		strings.Contains(uresp.Diagnostics.Errors()[0].Detail(), "own account") {
+		t.Errorf("update: %v", uresp.Diagnostics)
 	}
 }
