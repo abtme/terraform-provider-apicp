@@ -39,6 +39,7 @@ resource "apicp_mail_settings" "this" {
 
 ### Read-Only
 
+- `compression_methods` (List of String) The stored-mail compression methods this server's Dovecot can write - what `apicp_mail_domain.compression` accepts besides `off` (empty while compression is unavailable: the plugin is missing or cannot load). Read-only; compression is set per mail domain. Empty on apicp before v0.8.0.
 - `default_max_message_size_mb` (Number) apicp's own default - what the server has until this is set, and what destroying this resource goes back to.
 - `id` (String) Always `mail_settings`.
 

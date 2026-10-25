@@ -20,8 +20,19 @@ type MailSettings struct {
 	// Dovecot counts as weak (MD5-crypt and the like, kept from an older
 	// server). nil = an apicpd from before the setting (see
 	// ErrWeakPasswordSchemesUnsupported).
-	AllowWeakPasswordSchemes *bool  `json:"allow_weak_password_schemes,omitempty"`
-	UpdatedAt                string `json:"updated_at,omitempty"`
+	AllowWeakPasswordSchemes *bool `json:"allow_weak_password_schemes,omitempty"`
+	// Compression is what the server's Dovecot can do for stored-mail
+	// compression (read-only; nil before apicp v0.8.0).
+	Compression *MailCompressionSupport `json:"compression,omitempty"`
+	UpdatedAt   string                  `json:"updated_at,omitempty"`
+}
+
+// MailCompressionSupport is the compression part of GET /v1/mail/settings.
+type MailCompressionSupport struct {
+	// Methods are those the plugin can write; Ready is false while a domain
+	// cannot have compression on (plugin missing or broken, lookup not in place).
+	Methods []string `json:"methods"`
+	Ready   bool     `json:"ready"`
 }
 
 // WeakPasswordSchemes is AllowWeakPasswordSchemes with an old apicpd's

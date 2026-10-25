@@ -8,3 +8,10 @@ resource "apicp_mail_domain" "shop" {
   name     = "shop.example"
   relay_id = apicp_mail_relay.shop.id
 }
+
+# New mail stored compressed (zstd at its default level 3; needs apicp v0.8.0).
+# Mail already stored is compressed with `apicp mail compress-existing --domain archive.example.com`.
+resource "apicp_mail_domain" "archive" {
+  name        = "archive.example.com"
+  compression = "zstd"
+}

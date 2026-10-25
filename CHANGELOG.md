@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.2.0 (unreleased) - with apicp v0.8.0 (per-domain backups, a relay per mail domain)
+## v0.2.0 (unreleased) - with apicp v0.7.0 (per-domain backups) and v0.8.0 (a relay per mail domain, stored-mail compression)
 
-The backup changes below need apicp v0.7.0 or later; the relay changes need v0.8.0.
+The backup changes below need apicp v0.7.0 or later; the relay and compression changes need v0.8.0.
 
 ### apicp_mail_relay (new)
 
@@ -26,16 +26,6 @@ The backup changes below need apicp v0.7.0 or later; the relay changes need v0.8
   relay) or `terraform state rm`.
 - Import: `node_id/relay_id`.
 - On an apicpd before v0.8.0 creating one is an error saying so.
-
-### apicp_mail_domain
-
-- New optional `relay_id`: the relay the domain's outgoing mail goes through (`""` = the server's default relay).
-  Left out, the relay is left as it is on the server and the state shows the server's value (like
-  `apicp_database.vhost_id`). Only sent when set (create) or changed (update), so configurations without it keep
-  working on older apicpd. Setting it needs an admin account's token; the relay must have no login and not be on
-  465, unless it is the default relay itself.
-- On an apicpd before v0.8.0 (which ignores the field) a `relay_id` is an error naming the version; a domain created
-  that way is kept in state, so Terraform replaces it on the next apply.
 
 ### apicp_smtp_relay
 
@@ -115,3 +105,35 @@ The backup changes below need apicp v0.7.0 or later; the relay changes need v0.8
 - apicp's refusals read better: a name another account already has (409, names are unique ignoring case) says
   so and how to import that account; an invalid request (422), such as a parent of the wrong tier, explains the
   admin -> reseller -> user hierarchy.
+
+### apicp_mail_domain
+
+- New optional `relay_id`: the relay the domain's outgoing mail goes through (`""` = the server's default relay).
+  Left out, the relay is left as it is on the server and the state shows the server's value (like
+  `apicp_database.vhost_id`). Only sent when set (create) or changed (update), so configurations without it keep
+  working on older apicpd. Setting it needs an admin account's token; the relay must have no login and not be on
+  465, unless it is the default relay itself.
+- On an apicpd before v0.8.0 (which ignores the field) a `relay_id` is an error naming the version; a domain created
+  that way is kept in state, so Terraform replaces it on the next apply.
+
+- New optional `compression` (`off`, the default, `zstd`, `lz4`, `gz`, `bz2`) and `compression_level` (`0`, the
+  default, is the method's own default): how new mail of the domain is stored, through Dovecot's mail_compress
+  plugin. Checked before anything is sent (unknown methods, xz, levels out of range, a level for lz4 or off);
+  apicp itself refuses a method the server's Dovecot cannot write. Needs apicp v0.8.0: on an older apicpd, `off`
+  works as before (nothing is sent) and any other method is an error after create (the domain is kept in state)
+  or update.
+- Compression is sent on update only when it changes: apicp refuses a compression change (409) while a
+  compress-existing or decompress-existing job of the domain runs, and changes to the other arguments still go
+  through then.
+- New computed `compressed_mail`: some of the domain's stored mail may be compressed (apicp backups store it
+  decompressed).
+- Compressing or decompressing the mail already stored is a one-off job (`apicp mail compress-existing`,
+  `decompress-existing`, the panel), deliberately not a resource.
+
+### apicp_mail_settings
+
+- New computed `compression_methods`: what the server's Dovecot can write for stored-mail compression (empty while
+  compression is unavailable, and on apicp before v0.8.0). Compression itself is set per mail domain; there is no
+  server-wide default.
+- apicp v0.8.0 answers 422 to a mail settings field it does not know; the provider sends only the two it has
+  always sent.

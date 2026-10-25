@@ -6,26 +6,26 @@ import "testing"
 // only when it changes ("" = back to the default relay).
 func TestMailDomainRelayIsSentOnlyWhenSet(t *testing.T) {
 	c, last := capture(t, `{"id":"mdom_1","name":"a.example"}`)
-	if _, err := c.CreateMailDomain("a.example", Protocols{}, 0, ""); err != nil {
+	if _, err := c.CreateMailDomain("a.example", Protocols{}, 0, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if *last != `{"name":"a.example","disable_imap":false,"disable_pop3":false,"max_emails_per_hour":0}` {
 		t.Errorf("create without a relay: %s", *last)
 	}
-	if _, err := c.CreateMailDomain("a.example", Protocols{}, 0, "relay_1"); err != nil {
+	if _, err := c.CreateMailDomain("a.example", Protocols{}, 0, "relay_1", nil); err != nil {
 		t.Fatal(err)
 	}
 	if *last != `{"name":"a.example","disable_imap":false,"disable_pop3":false,"max_emails_per_hour":0,"relay_id":"relay_1"}` {
 		t.Errorf("create with a relay: %s", *last)
 	}
-	if _, err := c.UpdateMailDomain("mdom_1", Protocols{}, 5, nil); err != nil {
+	if _, err := c.UpdateMailDomain("mdom_1", Protocols{}, 5, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if *last != `{"disable_imap":false,"disable_pop3":false,"max_emails_per_hour":5}` {
 		t.Errorf("update without a relay change: %s", *last)
 	}
 	empty := ""
-	if _, err := c.UpdateMailDomain("mdom_1", Protocols{}, 5, &empty); err != nil {
+	if _, err := c.UpdateMailDomain("mdom_1", Protocols{}, 5, &empty, nil); err != nil {
 		t.Fatal(err)
 	}
 	if *last != `{"disable_imap":false,"disable_pop3":false,"max_emails_per_hour":5,"relay_id":""}` {

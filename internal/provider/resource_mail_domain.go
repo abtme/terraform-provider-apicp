@@ -9,8 +9,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -19,6 +21,11 @@ import (
 
 var _ resource.Resource = &MailDomainResource{}
 var _ resource.ResourceWithImportState = &MailDomainResource{}
+var _ resource.ResourceWithValidateConfig = &MailDomainResource{}
+
+// compressionLevels are the levels apicp accepts per compression method
+// (0 = the method's default; off and lz4 take none).
+var compressionLevels = map[string][2]int64{"off": {0, 0}, "zstd": {1, 22}, "lz4": {0, 0}, "gz": {1, 9}, "bz2": {1, 9}}
 
 func NewMailDomainResource() resource.Resource { return &MailDomainResource{} }
 
@@ -32,11 +39,18 @@ type MailDomainResourceModel struct {
 	DisablePOP3      types.Bool   `tfsdk:"disable_pop3"`
 	MaxEmailsPerHour types.Int64  `tfsdk:"max_emails_per_hour"`
 	RelayID          types.String `tfsdk:"relay_id"`
+	Compression      types.String `tfsdk:"compression"`
+	CompressionLevel types.Int64  `tfsdk:"compression_level"`
+	CompressedMail   types.Bool   `tfsdk:"compressed_mail"`
 	Status           types.String `tfsdk:"status"`
 }
 
 func (m *MailDomainResourceModel) protocols() client.Protocols {
 	return client.Protocols{DisableIMAP: m.DisableIMAP.ValueBool(), DisablePOP3: m.DisablePOP3.ValueBool()}
+}
+
+func (m *MailDomainResourceModel) compression() *client.Compression {
+	return &client.Compression{Method: m.Compression.ValueString(), Level: int(m.CompressionLevel.ValueInt64())}
 }
 
 func (r *MailDomainResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -84,6 +98,26 @@ func (r *MailDomainResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				MarkdownDescription: "ID of the relay (an `apicp_mail_relay`, or the default relay's ID) this domain's outgoing mail goes through: mail whose envelope sender is in this domain. `\"\"` = the server's default relay (bounces and every other sender always use that one). The relay must have no login and not be on port 465 (all relays share Postfix's one TLS setting), unless it is the default relay itself. Leave it out to leave the relay as it is on the server (the panel and `apicp maildomain relay` set it too) - it then shows the server's value. Only an admin account's token may set it. Needs apicp v0.8.0 or later.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
+			"compression": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString("off"),
+				MarkdownDescription: "How new mail of this domain is stored: `off` (default), `zstd`, `lz4`, `gz` or `bz2` (Dovecot's mail_compress plugin; mail programs notice nothing). " +
+					"`zstd` (level 3) is the right choice almost always: as small as gzip, about ten times faster. `lz4` uses the least CPU and saves less; `gz` for compatibility; high zstd levels only for archive mailboxes; `bz2` has no advantage. " +
+					"Only methods the server's Dovecot can write are accepted (`apicp_mail_settings.compression_methods`). Mail already stored is not changed: compress or decompress it with `apicp mail compress-existing` / `decompress-existing` (a one-off job, deliberately not a Terraform resource); turning compression off keeps compressed mail readable. " +
+					"Cannot change while such a job of the domain runs. Needs apicp v0.8.0.",
+			},
+			"compression_level": schema.Int64Attribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             int64default.StaticInt64(0),
+				MarkdownDescription: "The method's level: `zstd` 1-22, `gz` 1-9, `bz2` 1-9 (block size); `lz4` and `off` take none. `0` (default) = the method's own default (zstd 3, gz 6, bz2 9).",
+			},
+			"compressed_mail": schema.BoolAttribute{
+				Computed:            true,
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "Some of the domain's stored mail may be compressed (compression was on, or compress-existing ran, since the last whole-domain decompress-existing that left nothing compressed). apicp backups store such a domain's mail decompressed.",
+			},
 			"status": schema.StringAttribute{Computed: true},
 		},
 	}
@@ -108,6 +142,35 @@ func relayTooOld(want string, d *client.MailDomain) (string, bool) {
 		"Upgrade apicpd, or remove relay_id from the configuration.", want, d.RelayID), true
 }
 
+// ValidateConfig checks compression and compression_level against what apicp
+// accepts, before anything is sent.
+func (r *MailDomainResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg MailDomainResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() || cfg.Compression.IsUnknown() || cfg.CompressionLevel.IsUnknown() {
+		return
+	}
+	method := "off"
+	if !cfg.Compression.IsNull() {
+		method = cfg.Compression.ValueString()
+	}
+	rng, ok := compressionLevels[method]
+	if !ok {
+		resp.Diagnostics.AddAttributeError(path.Root("compression"), "Unknown compression",
+			fmt.Sprintf("%q: want off, zstd, lz4, gz or bz2 (xz is not offered: Dovecot 2.4 can no longer write it)", method))
+		return
+	}
+	if cfg.CompressionLevel.IsNull() || cfg.CompressionLevel.ValueInt64() == 0 {
+		return
+	}
+	level := cfg.CompressionLevel.ValueInt64()
+	if rng[1] == 0 {
+		resp.Diagnostics.AddAttributeError(path.Root("compression_level"), "No level for this method", fmt.Sprintf("%s takes no level: leave compression_level at 0", method))
+	} else if level < rng[0] || level > rng[1] {
+		resp.Diagnostics.AddAttributeError(path.Root("compression_level"), "Level out of range", fmt.Sprintf("%s takes %d to %d (0 = its default)", method, rng[0], rng[1]))
+	}
+}
+
 func (r *MailDomainResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
@@ -128,6 +191,9 @@ func (r *MailDomainResource) applyDomain(d *client.MailDomain, m *MailDomainReso
 	m.DisablePOP3 = types.BoolValue(d.DisablePOP3)
 	m.MaxEmailsPerHour = types.Int64Value(int64(d.MaxEmailsPerHour))
 	m.RelayID = types.StringValue(d.RelayID)
+	m.Compression = types.StringValue(d.CompressionMethod())
+	m.CompressionLevel = types.Int64Value(int64(d.CompressionLevel))
+	m.CompressedMail = types.BoolValue(d.CompressedMail)
 	m.Status = types.StringValue(d.Status)
 }
 
@@ -142,7 +208,17 @@ func (r *MailDomainResource) Create(ctx context.Context, req resource.CreateRequ
 	if want := plan.wantRelay(); want != nil {
 		relay = *want
 	}
-	d, err := r.client.CreateMailDomain(plan.Name.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()), relay)
+	d, err := r.client.CreateMailDomain(plan.Name.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()), relay, plan.compression())
+	if errors.Is(err, client.ErrCompressionUnsupported) {
+		// Created without it: kept in state (as it is) so it is not created twice.
+		r.applyDomain(d, &plan)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+		resp.Diagnostics.AddAttributeError(path.Root("compression"), "Compression not supported", err.Error())
+		if detail, old := relayTooOld(relay, d); old {
+			resp.Diagnostics.AddAttributeError(path.Root("relay_id"), "relay_id not supported", detail)
+		}
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mail domain", errorDetail(err))
 		return
@@ -176,7 +252,10 @@ func (r *MailDomainResource) Read(ctx context.Context, req resource.ReadRequest,
 }
 
 // Update - name requires replace, so only the protocol switches, the
-// sending limit and the relay change here.
+// sending limit, the relay and the compression change here. Compression is
+// sent only when it changes: apicp refuses a compression change (409) while a
+// compress- or decompress-existing job of the domain runs, and other changes
+// must still go through then.
 func (r *MailDomainResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state MailDomainResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -189,7 +268,15 @@ func (r *MailDomainResource) Update(ctx context.Context, req resource.UpdateRequ
 	if relay != nil && *relay == state.RelayID.ValueString() {
 		relay = nil
 	}
-	d, err := r.client.UpdateMailDomain(state.ID.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()), relay)
+	var comp *client.Compression
+	if !plan.Compression.Equal(state.Compression) || !plan.CompressionLevel.Equal(state.CompressionLevel) {
+		comp = plan.compression()
+	}
+	d, err := r.client.UpdateMailDomain(state.ID.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()), relay, comp)
+	if errors.Is(err, client.ErrCompressionUnsupported) {
+		resp.Diagnostics.AddAttributeError(path.Root("compression"), "Compression not supported", err.Error())
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating mail domain", errorDetail(err))
 		return
