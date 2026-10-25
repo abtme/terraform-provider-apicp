@@ -47,13 +47,13 @@ resource "apicp_account" "client" {
 
 ### Required
 
-- `name` (String)
+- `name` (String) Account name. apicp (v0.7.0 on) keeps names unique, ignoring case: a name another account already has is refused. Accounts that shared a name before that keep it.
 - `tier` (String) `admin`, `reseller`, or `user`. Changing this replaces the resource — apicp has no re-tiering API (would need to re-validate every descendant account).
 
 ### Optional
 
 - `package_id` (String) Resource-limit apicp_package to assign — must belong to the tier being created/patched (`for_tier="reseller"` for a reseller account, `for_tier="user"` for a user account) and must have been created by this same caller account. Omit for an admin account (admins are always unlimited).
-- `parent_account_id` (String) Defaults to the caller's own account. Ignored (and forced to the caller's own account) when the provider authenticates as a reseller. Changing this replaces the resource.
+- `parent_account_id` (String) Defaults to the caller's own account. The parent's tier is checked (apicp v0.7.0 on): a `user` account's parent must be an `admin` or `reseller` account, a `reseller`'s an `admin` account; `admin` accounts have no parent. Ignored (and forced to the caller's own account) when the provider authenticates as a reseller. Changing this replaces the resource.
 
 ### Read-Only
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -44,7 +46,8 @@ func (r *AccountResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"name": schema.StringAttribute{
-				Required: true,
+				Required:            true,
+				MarkdownDescription: "Account name. apicp (v0.7.0 on) keeps names unique, ignoring case: a name another account already has is refused. Accounts that shared a name before that keep it.",
 			},
 			"tier": schema.StringAttribute{
 				Required:            true,
@@ -54,7 +57,7 @@ func (r *AccountResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"parent_account_id": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Defaults to the caller's own account. Ignored (and forced to the caller's own account) when the provider authenticates as a reseller. Changing this replaces the resource.",
+				MarkdownDescription: "Defaults to the caller's own account. The parent's tier is checked (apicp v0.7.0 on): a `user` account's parent must be an `admin` or `reseller` account, a `reseller`'s an `admin` account; `admin` accounts have no parent. Ignored (and forced to the caller's own account) when the provider authenticates as a reseller. Changing this replaces the resource.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown(), stringplanmodifier.RequiresReplace()},
 			},
 			"package_id": schema.StringAttribute{
@@ -101,7 +104,8 @@ func (r *AccountResource) Create(ctx context.Context, req resource.CreateRequest
 
 	a, err := r.client.CreateAccount(plan.Name.ValueString(), plan.Tier.ValueString(), plan.ParentAccountID.ValueString(), plan.PackageID.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Error creating account", err.Error())
+		summary, detail := accountError("creating", plan.Name.ValueString(), err)
+		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
 	r.applyAccount(a, &plan)
@@ -142,7 +146,8 @@ func (r *AccountResource) Update(ctx context.Context, req resource.UpdateRequest
 	packageID := plan.PackageID.ValueString()
 	a, err := r.client.PatchAccount(plan.ID.ValueString(), &name, &packageID)
 	if err != nil {
-		resp.Diagnostics.AddError("Error updating account", err.Error())
+		summary, detail := accountError("updating", name, err)
+		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
 	r.applyAccount(a, &plan)
@@ -162,4 +167,26 @@ func (r *AccountResource) Delete(ctx context.Context, req resource.DeleteRequest
 
 func (r *AccountResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+}
+
+// accountError turns apicp's refusals of an account into something to act
+// on: 409 is a name another account has (names are unique ignoring case),
+// 422 an invalid request such as a parent of the wrong tier.
+func accountError(action, name string, err error) (summary, detail string) {
+	var ae *client.APIError
+	if !errors.As(err, &ae) {
+		return "Error " + action + " account", err.Error()
+	}
+	switch ae.StatusCode {
+	case http.StatusConflict:
+		return "Account name already in use",
+			fmt.Sprintf("apicp refused the name %q: %s.\n\nChoose another name, or, if that account is the one this resource should manage, import it: terraform import <address> <account ID>.", name, ae.Message)
+	case http.StatusUnprocessableEntity:
+		detail = "apicp refused the account: " + ae.Message + "."
+		if strings.Contains(ae.Message, "parent") {
+			detail += "\n\nThe hierarchy is admin -> reseller -> user: a user account's parent_account_id must be an admin or reseller account, a reseller's an admin account, and admin accounts have no parent."
+		}
+		return "Invalid account", detail
+	}
+	return "Error " + action + " account", err.Error()
 }
