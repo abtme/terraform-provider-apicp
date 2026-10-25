@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -40,6 +41,7 @@ type MailSettingsResourceModel struct {
 	MaxMessageSizeMB         types.Int64  `tfsdk:"max_message_size_mb"`
 	DefaultMaxMessageSizeMB  types.Int64  `tfsdk:"default_max_message_size_mb"`
 	AllowWeakPasswordSchemes types.Bool   `tfsdk:"allow_weak_password_schemes"`
+	CompressionMethods       types.List   `tfsdk:"compression_methods"`
 }
 
 func (r *MailSettingsResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -66,6 +68,11 @@ func (r *MailSettingsResource) Schema(_ context.Context, _ resource.SchemaReques
 				Default:  booldefault.StaticBool(false),
 				MarkdownDescription: "Let mailboxes log in with password hashes Dovecot counts as weak (MD5-crypt and the like, kept from an older server by an import, a restore or a hash copy). " +
 					"Off (default `false`), Dovecot 2.4 refuses those logins - \"authentication failed\" with the right password. Applies to every mailbox on the server: turn it off again once those people have new passwords (new passwords are always SHA512-crypt). On Dovecot 2.3 it changes nothing (2.3 accepts them anyway).",
+			},
+			"compression_methods": schema.ListAttribute{
+				Computed:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "The stored-mail compression methods this server's Dovecot can write - what `apicp_mail_domain.compression` accepts besides `off` (empty while compression is unavailable: the plugin is missing or cannot load). Read-only; compression is set per mail domain. Empty on apicp before v0.8.0.",
 			},
 			"default_max_message_size_mb": schema.Int64Attribute{
 				Computed:            true,
@@ -111,6 +118,13 @@ func (r *MailSettingsResource) apply(st *client.MailSettings, m *MailSettingsRes
 	m.MaxMessageSizeMB = types.Int64Value(st.MaxMessageSizeMB)
 	m.DefaultMaxMessageSizeMB = types.Int64Value(st.DefaultMaxMessageSizeMB)
 	m.AllowWeakPasswordSchemes = types.BoolValue(st.WeakPasswordSchemes())
+	methods := []attr.Value{}
+	if st.Compression != nil && st.Compression.Ready {
+		for _, x := range st.Compression.Methods {
+			methods = append(methods, types.StringValue(x))
+		}
+	}
+	m.CompressionMethods = types.ListValueMust(types.StringType, methods)
 	return nil
 }
 

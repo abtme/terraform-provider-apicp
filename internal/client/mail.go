@@ -11,9 +11,35 @@ type MailDomain struct {
 	Name     string `json:"name"`
 	UnixUser string `json:"unix_user"`
 	Protocols
-	MaxEmailsPerHour int    `json:"max_emails_per_hour"`
-	Status           string `json:"status"`
-	Error            string `json:"error,omitempty"`
+	MaxEmailsPerHour int `json:"max_emails_per_hour"`
+	// Compression is how new mail of the domain is stored (off, zstd, lz4,
+	// gz, bz2) and CompressionLevel its level (0 = the method's default);
+	// nil on an apicpd from before stored-mail compression (v0.8.0), which
+	// does not return them. CompressedMail: some stored mail may be compressed.
+	Compression      *string `json:"compression,omitempty"`
+	CompressionLevel int     `json:"compression_level"`
+	CompressedMail   bool    `json:"compressed_mail"`
+	Status           string  `json:"status"`
+	Error            string  `json:"error,omitempty"`
+}
+
+// CompressionMethod is Compression with an old apicpd's missing field read as
+// "off" (it has no compression).
+func (d *MailDomain) CompressionMethod() string {
+	if d.Compression == nil || *d.Compression == "" {
+		return "off"
+	}
+	return *d.Compression
+}
+
+// ErrCompressionUnsupported is a compression setting against an apicpd that
+// does not know it (before v0.8.0 it ignores the fields).
+var ErrCompressionUnsupported = errors.New("this apicpd does not support stored-mail compression (compression needs apicp v0.8.0) - upgrade apicp, or leave compression off")
+
+// Compression is a mail domain's compression setting to send; nil sends none.
+type Compression struct {
+	Method string `json:"compression"`
+	Level  int    `json:"compression_level"`
 }
 
 // Protocols mirrors apicp's mail.Protocols: which login protocols are
@@ -27,12 +53,23 @@ type mailDomainCreateRequest struct {
 	Name string `json:"name"`
 	Protocols
 	MaxEmailsPerHour int `json:"max_emails_per_hour"`
+	*Compression
 }
 
-func (c *Client) CreateMailDomain(name string, p Protocols, maxEmailsPerHour int) (*MailDomain, error) {
+// CreateMailDomain implements POST /v1/mail/domains. comp is sent only when
+// it is not off, so an apicpd from before compression (which ignores the
+// fields) still creates the domain; asking it for compression is
+// ErrCompressionUnsupported.
+func (c *Client) CreateMailDomain(name string, p Protocols, maxEmailsPerHour int, comp *Compression) (*MailDomain, error) {
+	if comp != nil && comp.Method == "off" && comp.Level == 0 {
+		comp = nil
+	}
 	var d MailDomain
-	if err := c.Post("/v1/mail/domains", mailDomainCreateRequest{Name: name, Protocols: p, MaxEmailsPerHour: maxEmailsPerHour}, &d); err != nil {
+	if err := c.Post("/v1/mail/domains", mailDomainCreateRequest{Name: name, Protocols: p, MaxEmailsPerHour: maxEmailsPerHour, Compression: comp}, &d); err != nil {
 		return nil, err
+	}
+	if comp != nil && d.Compression == nil {
+		return &d, ErrCompressionUnsupported
 	}
 	return &d, nil
 }
@@ -40,14 +77,20 @@ func (c *Client) CreateMailDomain(name string, p Protocols, maxEmailsPerHour int
 type mailDomainUpdateRequest struct {
 	Protocols
 	MaxEmailsPerHour int `json:"max_emails_per_hour"`
+	*Compression
 }
 
 // UpdateMailDomain implements PATCH /v1/mail/domains/{id}, sending every
-// mutable field.
-func (c *Client) UpdateMailDomain(id string, p Protocols, maxEmailsPerHour int) (*MailDomain, error) {
+// mutable field, and the compression setting when comp is not nil (only when
+// it changes: apicp refuses a compression change while a compress- or
+// decompress-existing job of the domain runs).
+func (c *Client) UpdateMailDomain(id string, p Protocols, maxEmailsPerHour int, comp *Compression) (*MailDomain, error) {
 	var d MailDomain
-	if err := c.Patch("/v1/mail/domains/"+id, mailDomainUpdateRequest{Protocols: p, MaxEmailsPerHour: maxEmailsPerHour}, &d); err != nil {
+	if err := c.Patch("/v1/mail/domains/"+id, mailDomainUpdateRequest{Protocols: p, MaxEmailsPerHour: maxEmailsPerHour, Compression: comp}, &d); err != nil {
 		return nil, err
+	}
+	if comp != nil && d.Compression == nil && (comp.Method != "off" || comp.Level != 0) {
+		return &d, ErrCompressionUnsupported
 	}
 	return &d, nil
 }

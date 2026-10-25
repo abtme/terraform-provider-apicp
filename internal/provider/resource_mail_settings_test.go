@@ -17,7 +17,7 @@ import (
 
 var mailSettingsType = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
 	"id": tftypes.String, "max_message_size_mb": tftypes.Number, "default_max_message_size_mb": tftypes.Number,
-	"allow_weak_password_schemes": tftypes.Bool,
+	"allow_weak_password_schemes": tftypes.Bool, "compression_methods": tftypes.List{ElementType: tftypes.String},
 }}
 
 func mailSettingsSchema(t *testing.T) resource.SchemaResponse {
@@ -44,6 +44,7 @@ func mailSettingsValueWeak(id any, size, def any, weak any) tftypes.Value {
 	return tftypes.NewValue(mailSettingsType, map[string]tftypes.Value{
 		"id": v(tftypes.String, id), "max_message_size_mb": v(tftypes.Number, size), "default_max_message_size_mb": v(tftypes.Number, def),
 		"allow_weak_password_schemes": v(tftypes.Bool, weak),
+		"compression_methods":         tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, tftypes.UnknownValue),
 	})
 }
 
@@ -79,9 +80,10 @@ func (f *fakeMailSettings) server(t *testing.T) *httptest.Server {
 			t.Errorf("unexpected %s", r.Method)
 		}
 		out := map[string]any{"max_message_size_mb": f.size, "default_max_message_size_mb": 50,
-			"updated_at": "2026-10-24T15:00:00Z", "compression": "zstd"} // a field this provider does not know yet
+			"updated_at": "2026-10-24T15:00:00Z", "guide": "a field this provider does not know"}
 		if !f.old {
 			out["allow_weak_password_schemes"] = f.weak
+			out["compression"] = map[string]any{"methods": []string{"zstd", "lz4", "gz", "bz2"}, "ready": true, "plugin": "loaded"}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)
@@ -107,6 +109,11 @@ func TestMailSettingsCreateSetsTheSize(t *testing.T) {
 	resp.State.Get(context.Background(), &got)
 	if got.ID.ValueString() != "mail_settings" || got.MaxMessageSizeMB.ValueInt64() != 0 || got.DefaultMaxMessageSizeMB.ValueInt64() != 50 || got.AllowWeakPasswordSchemes.ValueBool() {
 		t.Errorf("state = %+v", got)
+	}
+	var methods []string
+	got.CompressionMethods.ElementsAs(context.Background(), &methods, false)
+	if strings.Join(methods, ",") != "zstd,lz4,gz,bz2" {
+		t.Errorf("compression_methods = %v", methods)
 	}
 }
 
