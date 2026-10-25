@@ -3,12 +3,18 @@
 page_title: "apicp_system_backup_config Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
-  Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, and how they are written (format, compression, encryption). The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (/v1/system/backup-sftp, /v1/system/backup-encryption), not in Terraform state.
+  Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, how they are written (format, compression, encryption), whether they are split per domain and whether each run is checked by reading it back. The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (/v1/system/backup-sftp, /v1/system/backup-encryption), not in Terraform state.
+  Only the arguments you set are managed. On apicp v0.7.0 or later the provider changes settings with PATCH /v1/system/backup-config and sends only enabled, destination and the optional arguments set in the configuration; anything left out keeps the value saved on the server (set in the panel or with apicp backup configure). Removing an optional argument from the configuration puts that setting back to the server's default. The provider never writes back values it read: apicp shows effective values, and saving one as an explicit choice (for example encrypt = false read while the server had no key yet) would keep it after the default changes. encryption_warning says when backups are written unencrypted although the server has a key.
+  Older apicpd has no PATCH: the provider then replaces the whole config with PUT as before - every optional argument left out goes back to the server's default, retention (when left out) keeps the server's value, and backup_unit / verify are refused.
 ---
 
 # apicp_system_backup_config (Resource)
 
-Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, and how they are written (format, compression, encryption). The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (`/v1/system/backup-sftp`, `/v1/system/backup-encryption`), not in Terraform state.
+Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, how they are written (format, compression, encryption), whether they are split per domain and whether each run is checked by reading it back. The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (`/v1/system/backup-sftp`, `/v1/system/backup-encryption`), not in Terraform state.
+
+**Only the arguments you set are managed.** On apicp v0.7.0 or later the provider changes settings with `PATCH /v1/system/backup-config` and sends only `enabled`, `destination` and the optional arguments set in the configuration; anything left out keeps the value saved on the server (set in the panel or with `apicp backup configure`). Removing an optional argument from the configuration puts that setting back to the server's default. The provider never writes back values it read: apicp shows effective values, and saving one as an explicit choice (for example `encrypt = false` read while the server had no key yet) would keep it after the default changes. `encryption_warning` says when backups are written unencrypted although the server has a key.
+
+Older apicpd has no PATCH: the provider then replaces the whole config with `PUT` as before - every optional argument left out goes back to the server's default, `retention` (when left out) keeps the server's value, and `backup_unit` / `verify` are refused.
 
 ## Example Usage
 
@@ -16,10 +22,23 @@ Configures apicp's system-level backup scheduler - a singleton resource, one per
 resource "apicp_system_backup_config" "this" {
   enabled     = true
   destination = "local"
+
+  # Optional: only the settings set here are managed; the rest keep what
+  # the server has saved.
+  encrypt     = true     # needs an encryption key on the server
+  backup_unit = "domain" # or "account" for one archive per account
+  verify      = true     # read every run back after it is written
 }
 
 output "system_backup_last_run_at" {
   value = apicp_system_backup_config.this.last_run_at
+}
+
+output "system_backup_warnings" {
+  value = concat(
+    compact([apicp_system_backup_config.this.encryption_warning]),
+    apicp_system_backup_config.this.last_run_warnings,
+  )
 }
 ```
 
@@ -33,17 +52,21 @@ output "system_backup_last_run_at" {
 
 ### Optional
 
-- `compress` (Boolean) Compress the archive file. Omit for the server default (on). The parts from the node are already compressed, and raw files are unaffected.
-- `encrypt` (Boolean) Encrypt backups. Omit for the server default: on whenever it has an encryption key. `true` without a key is refused. Keys are set up in the panel or API, never here.
-- `format` (String) How archives are written: `targz`, `zip` or `raw` (plain files in a folder). Omit for the server's default.
-- `retention` (Number) How many backups to keep per account (and of the system state): after each new backup the older ones beyond this are deleted. `0` (the default) keeps every backup; otherwise 1 to 99.
-- `schedule_days` (Set of String) Days to run on (`mon` to `sun`). Omit for every day. Needs `schedule_time`.
-- `schedule_time` (String) Time of day to run, 24-hour `HH:MM` (for example `03:30`). Omit to run every 24 hours.
-- `timezone` (String) IANA timezone the schedule is read in, for example `Europe/London`. Omit for UTC. Needs `schedule_time`.
+- `backup_unit` (String) How each account is split into archives: `domain` (the default: a settings archive per account plus one web and one mail archive per domain) or `account` (one archive per account, as before apicp v0.7.0). Omit to keep the server's setting. Needs apicp v0.7.0 or later.
+- `compress` (Boolean) Compress the archive file. Omit to keep the server's setting (its default is on); removing it from the configuration puts back that default. The parts from the node are already compressed, and raw files are unaffected.
+- `encrypt` (Boolean) Encrypt backups. Omit to keep the server's setting (its default is on whenever it has an encryption key); removing it from the configuration puts it back to that default. `true` without a key is refused. Keys are set up in the panel or API, never here.
+- `format` (String) How archives are written: `targz`, `zip` or `raw` (plain files in a folder). Omit to keep the server's setting; removing it from the configuration puts back the server's default.
+- `retention` (Number) How many scheduled run folders to keep (older ones are removed only after a run with no failure), and how many one-off backups to keep of each part of an account (each website, mail domain and the settings archive). `0` keeps every backup; otherwise 1 to 99. Leave it out to keep the server's value (shown here).
+- `schedule_days` (Set of String) Days to run on (`mon` to `sun`); none means every day. Omit to keep the server's setting; removing it from the configuration clears it. Needs `schedule_time`.
+- `schedule_time` (String) Time of day to run, 24-hour `HH:MM` (for example `03:30`). Omit to keep the server's setting; with none the scheduler runs every 24 hours. Removing it from the configuration clears it.
+- `timezone` (String) IANA timezone the schedule is read in, for example `Europe/London`; none means UTC. Omit to keep the server's setting; removing it from the configuration clears it. Needs `schedule_time`.
+- `verify` (Boolean) The restore check after each scheduled run (the server's default is on): every archive is read back, decrypted, its manifest parsed and every member read to the end; a failed check fails the run, so older runs are not pruned. Over SFTP it transfers everything twice. Omit to keep the server's setting. Needs apicp v0.7.0 or later.
 
 ### Read-Only
 
+- `encryption_warning` (String) Set when the server has an encryption key but backups are written unencrypted (encryption was turned off). Empty otherwise, and from apicpd before v0.7.0.
 - `id` (String) The ID of this resource.
 - `last_run_at` (String) RFC3339 timestamp of the scheduler's last run, if it has run at least once.
 - `last_run_error` (String) Error from the scheduler's last run, if it failed.
+- `last_run_warnings` (List of String) What the latest scheduled run could not capture in full (`<file>: <warning>`); the run still succeeded. Empty from apicpd before v0.7.0.
 - `next_run_at` (String) RFC3339 time of the next scheduled run, when enabled with a schedule.
