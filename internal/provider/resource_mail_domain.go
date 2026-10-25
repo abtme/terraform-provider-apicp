@@ -81,7 +81,7 @@ func (r *MailDomainResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"relay_id": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "ID of the relay (an `apicp_mail_relay`, or the default relay's ID) this domain's outgoing mail goes through: mail whose envelope sender is in this domain. `\"\"` = the server's default relay (bounces and every other sender always use that one). Leave it out to leave the relay as it is on the server (the panel and `apicp maildomain relay` set it too) - it then shows the server's value. Only an admin account's token may set it. Needs apicp v0.8.0 or later.",
+				MarkdownDescription: "ID of the relay (an `apicp_mail_relay`, or the default relay's ID) this domain's outgoing mail goes through: mail whose envelope sender is in this domain. `\"\"` = the server's default relay (bounces and every other sender always use that one). The relay must have no login and not be on port 465 (all relays share Postfix's one TLS setting), unless it is the default relay itself. Leave it out to leave the relay as it is on the server (the panel and `apicp maildomain relay` set it too) - it then shows the server's value. Only an admin account's token may set it. Needs apicp v0.8.0 or later.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"status": schema.StringAttribute{Computed: true},

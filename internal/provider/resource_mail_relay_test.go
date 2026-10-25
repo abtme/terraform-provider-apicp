@@ -18,6 +18,7 @@ import (
 // mail domain (mdom_1). old = an apicpd before v0.8.0: no relay routes, relay_id ignored.
 type fakeRelayAPI struct {
 	old      bool
+	first    bool   // the node has no relay yet: apicp makes the new one its default
 	relayID  string // the domain's
 	requests []string
 	bodies   []map[string]any
@@ -40,6 +41,10 @@ func (f *fakeRelayAPI) client(t *testing.T) *client.Client {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/nodes/node-1/smtp-relays":
 			for k, v := range body {
 				relay[k] = v
+			}
+			delete(relay, "skip_check")
+			if f.first {
+				relay["default"] = true
 			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(relay)
@@ -241,5 +246,47 @@ func TestMailRelayValidateConfigAndImport(t *testing.T) {
 		if resp.Diagnostics.HasError() == ok {
 			t.Errorf("import %q: %v", id, resp.Diagnostics)
 		}
+	}
+}
+
+// The node's first relay is its default whatever was asked: left out, the state shows it; default =
+// false is an error (the relay is saved and in state).
+func TestMailRelayFirstRelayIsTheDefault(t *testing.T) {
+	create := func(def any) (resource.CreateResponse, MailRelayResourceModel, *fakeRelayAPI) {
+		f := &fakeRelayAPI{first: true}
+		r := &MailRelayResource{client: f.client(t)}
+		resp := resource.CreateResponse{State: nullState(tfsdk.State{Schema: resourceSchema(t, r)})}
+		r.Create(context.Background(), resource.CreateRequest{Plan: mailRelayPlan(t, r, map[string]any{"id": unknownValue{}, "status": unknownValue{}, "default": def, "skip_check": true})}, &resp)
+		var got MailRelayResourceModel
+		resp.State.Get(context.Background(), &got)
+		return resp, got, f
+	}
+	resp, got, f := create(unknownValue{})
+	if resp.Diagnostics.HasError() || !got.Default.ValueBool() {
+		t.Fatalf("left out: %v %+v", resp.Diagnostics, got)
+	}
+	if f.bodies[0]["skip_check"] != true {
+		t.Errorf("skip_check not sent: %v", f.bodies[0])
+	}
+	resp, got, _ = create(false)
+	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "first relay") || got.ID.ValueString() != "relay_1" {
+		t.Fatalf("default = false on the first relay: %v %+v", resp.Diagnostics, got)
+	}
+}
+
+// default left out of the configuration is not sent on update (it stays what apicp has).
+func TestMailRelayUpdateLeavesDefaultAlone(t *testing.T) {
+	f := &fakeRelayAPI{}
+	r := &MailRelayResource{client: f.client(t)}
+	sch := resourceSchema(t, r)
+	state := tfsdk.State{Schema: sch, Raw: mailRelayPlan(t, r, map[string]any{"id": "relay_1", "status": "active", "default": true}).Raw}
+	plan := mailRelayPlan(t, r, map[string]any{"id": "relay_1", "status": unknownValue{}, "default": unknownValue{}, "name": "shop2"})
+	uresp := resource.UpdateResponse{State: state}
+	r.Update(context.Background(), resource.UpdateRequest{Plan: plan, State: state}, &uresp)
+	if uresp.Diagnostics.HasError() {
+		t.Fatal(uresp.Diagnostics)
+	}
+	if _, sent := f.bodies[0]["default"]; sent {
+		t.Errorf("default must not be sent: %v", f.bodies[0])
 	}
 }

@@ -29,15 +29,17 @@ type smtpRelayCreateRequest struct {
 	Port     int64  `json:"port"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// SkipCheck (apicp v0.8.0) saves a relay apicp cannot reach yet; only sent when true.
+	SkipCheck bool `json:"skip_check,omitempty"`
 }
 
 // EnableSMTPRelay implements POST /v1/nodes/{id}/smtp-relay - also used
 // to replace an existing relay config for the node (same "re-running
 // this call is how you update it" shape as apicp_ssh_access).
-func (c *Client) EnableSMTPRelay(nodeID, host string, port int64, username, password string) (*SMTPRelay, error) {
+func (c *Client) EnableSMTPRelay(nodeID, host string, port int64, username, password string, skipCheck bool) (*SMTPRelay, error) {
 	var r SMTPRelay
 	if err := c.Post(fmt.Sprintf("/v1/nodes/%s/smtp-relay", nodeID), smtpRelayCreateRequest{
-		Host: host, Port: port, Username: username, Password: password,
+		Host: host, Port: port, Username: username, Password: password, SkipCheck: skipCheck,
 	}, &r); err != nil {
 		return nil, err
 	}
@@ -62,24 +64,26 @@ func (c *Client) DisableSMTPRelay(nodeID string) error {
 
 // SMTPRelayCreate is the body of POST /v1/nodes/{id}/smtp-relays.
 type SMTPRelayCreate struct {
-	Name     string `json:"name"`
-	Host     string `json:"host"`
-	Port     int64  `json:"port"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	Default  bool   `json:"default,omitempty"`
+	Name      string `json:"name"`
+	Host      string `json:"host"`
+	Port      int64  `json:"port"`
+	Username  string `json:"username,omitempty"`
+	Password  string `json:"password,omitempty"`
+	Default   bool   `json:"default,omitempty"`
+	SkipCheck bool   `json:"skip_check,omitempty"`
 }
 
 // SMTPRelayPatch is the body of PATCH /v1/nodes/{id}/smtp-relays/{relayID};
 // nil fields are left as they are. Changing host or port of a relay with a
 // login needs the password in the same request.
 type SMTPRelayPatch struct {
-	Name     *string `json:"name,omitempty"`
-	Host     *string `json:"host,omitempty"`
-	Port     *int64  `json:"port,omitempty"`
-	Username *string `json:"username,omitempty"`
-	Password *string `json:"password,omitempty"`
-	Default  *bool   `json:"default,omitempty"`
+	Name      *string `json:"name,omitempty"`
+	Host      *string `json:"host,omitempty"`
+	Port      *int64  `json:"port,omitempty"`
+	Username  *string `json:"username,omitempty"`
+	Password  *string `json:"password,omitempty"`
+	Default   *bool   `json:"default,omitempty"`
+	SkipCheck bool    `json:"skip_check,omitempty"`
 }
 
 func relaysPath(nodeID string) string { return fmt.Sprintf("/v1/nodes/%s/smtp-relays", nodeID) }

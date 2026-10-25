@@ -9,7 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -32,15 +32,16 @@ var _ resource.ResourceWithValidateConfig = &MailRelayResource{}
 func NewMailRelayResource() resource.Resource { return &MailRelayResource{} }
 
 type MailRelayResourceModel struct {
-	ID       types.String `tfsdk:"id"`
-	NodeID   types.String `tfsdk:"node_id"`
-	Name     types.String `tfsdk:"name"`
-	Host     types.String `tfsdk:"host"`
-	Port     types.Int64  `tfsdk:"port"`
-	Username types.String `tfsdk:"username"`
-	Password types.String `tfsdk:"password"`
-	Default  types.Bool   `tfsdk:"default"`
-	Status   types.String `tfsdk:"status"`
+	ID        types.String `tfsdk:"id"`
+	NodeID    types.String `tfsdk:"node_id"`
+	Name      types.String `tfsdk:"name"`
+	Host      types.String `tfsdk:"host"`
+	Port      types.Int64  `tfsdk:"port"`
+	Username  types.String `tfsdk:"username"`
+	Password  types.String `tfsdk:"password"`
+	Default   types.Bool   `tfsdk:"default"`
+	SkipCheck types.Bool   `tfsdk:"skip_check"`
+	Status    types.String `tfsdk:"status"`
 }
 
 func (r *MailRelayResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -50,8 +51,10 @@ func (r *MailRelayResource) Metadata(_ context.Context, req resource.MetadataReq
 func (r *MailRelayResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "One outbound relay (smart host) of an apicp node. A node can have several (apicp v0.8.0 or later): the `default` one carries all outgoing mail, and a mail domain whose `relay_id` names another relay sends through that one instead (mail whose envelope sender is in the domain; bounces and every other sender use the default). " +
-			"With a login apicp requires TLS to the relay; without one TLS is used when the relay offers it; port 465 is TLS from the first byte. " +
-			"`apicp_smtp_relay` manages the node's default relay too: use one or the other for the default relay of a node, not both. apicp refuses to delete a relay while mail domains use it.",
+			"All relays of a node share Postfix's one TLS setting (the default relay's: STARTTLS when offered, required with a login), so a relay a mail domain uses must have no login and not be on port 465 (apicp refuses it). " +
+			"A node with relays always has exactly one default, and its first relay is it. apicp connects to a relay from the node before saving it (an SMTP greeting and STARTTLS) unless `skip_check` is set. " +
+			"Deleting is refused while mail domains use the relay, for the node's only relay, and for the default while other relays exist (make another one the default first, in the same or an earlier apply). To stop relaying altogether, the last relay goes with `apicp_smtp_relay`'s destroy (`DELETE /v1/nodes/{id}/smtp-relay`), or remove it from state (`terraform state rm`). " +
+			"`apicp_smtp_relay` manages the node's default relay too: use one or the other for the default relay of a node, not both.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -73,11 +76,11 @@ func (r *MailRelayResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			},
 			"port": schema.Int64Attribute{
 				Required:            true,
-				MarkdownDescription: "The relay's port (typically 587, or 465 for TLS from the first byte).",
+				MarkdownDescription: "The relay's port (e.g. 25, 587, 2525; 465, TLS from the first byte, only for a default relay while no mail domain has a relay of its own).",
 			},
 			"username": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "SASL login for the relay. Set `username` and `password` together, or omit both for a relay that accepts mail by the server's address (an empty string is not accepted: omit the attribute).",
+				MarkdownDescription: "SASL login for the relay - only for the default relay (a relay a mail domain uses accepts the server by its address). Set `username` and `password` together, or omit both (an empty string is not accepted: omit the attribute).",
 			},
 			"password": schema.StringAttribute{
 				Optional:            true,
@@ -87,8 +90,12 @@ func (r *MailRelayResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"default": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
-				Default:             booldefault.StaticBool(false),
-				MarkdownDescription: "Make this the node's default relay (the one that was default stops being it). Default `false`: a relay that is not the default is only used by the mail domains that name it. Set it on at most one relay of a node.",
+				MarkdownDescription: "Make this the node's default relay (the one that was default stops being it; the mail domains without a relay of their own follow at once). Left out, it shows what apicp has: the node's first relay is always the default, a later one is not. `false` on the node's first relay, or on the default relay, is an error (a node with relays always has a default: set `default = true` on another relay instead). Set it on at most one relay of a node.",
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()},
+			},
+			"skip_check": schema.BoolAttribute{
+				Optional:            true,
+				MarkdownDescription: "Save the relay without apicp first connecting to it from the node (for a relay that is not reachable yet). Only used when the relay is created or its host or port change.",
 			},
 			"status": schema.StringAttribute{Computed: true},
 		},
@@ -162,13 +169,20 @@ func (r *MailRelayResource) Create(ctx context.Context, req resource.CreateReque
 	relay, err := r.client.CreateRelay(plan.NodeID.ValueString(), client.SMTPRelayCreate{
 		Name: plan.Name.ValueString(), Host: plan.Host.ValueString(), Port: plan.Port.ValueInt64(),
 		Username: plan.Username.ValueString(), Password: plan.Password.ValueString(), Default: plan.Default.ValueBool(),
+		SkipCheck: plan.SkipCheck.ValueBool(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating mail relay", relayError(err))
 		return
 	}
+	wantedNotDefault := !plan.Default.IsUnknown() && !plan.Default.IsNull() && !plan.Default.ValueBool()
 	r.apply(relay, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	// Saved (and in state, so the next apply sees it), but not as configured.
+	if wantedNotDefault && relay.Default {
+		resp.Diagnostics.AddAttributeError(path.Root("default"), "The node's first relay is its default",
+			"apicp made this relay the node's default: it is the node's first relay, and a node with relays always has one. Set default = true (or leave it out) for this relay.")
+	}
 }
 
 func (r *MailRelayResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -200,8 +214,13 @@ func (r *MailRelayResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 	name, host, port := plan.Name.ValueString(), plan.Host.ValueString(), plan.Port.ValueInt64()
-	username, password, def := plan.Username.ValueString(), plan.Password.ValueString(), plan.Default.ValueBool()
-	patch := client.SMTPRelayPatch{Name: &name, Host: &host, Port: &port, Username: &username, Default: &def}
+	username, password := plan.Username.ValueString(), plan.Password.ValueString()
+	patch := client.SMTPRelayPatch{Name: &name, Host: &host, Port: &port, Username: &username, SkipCheck: plan.SkipCheck.ValueBool()}
+	// default only when the configuration sets it (left out, it stays what apicp has).
+	if !plan.Default.IsUnknown() && !plan.Default.IsNull() {
+		def := plan.Default.ValueBool()
+		patch.Default = &def
+	}
 	if username != "" {
 		patch.Password = &password
 	}

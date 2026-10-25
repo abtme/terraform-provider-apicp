@@ -39,13 +39,14 @@ var _ resource.ResourceWithValidateConfig = &SMTPRelayResource{}
 func NewSMTPRelayResource() resource.Resource { return &SMTPRelayResource{} }
 
 type SMTPRelayResourceModel struct {
-	ID       types.String `tfsdk:"id"`
-	NodeID   types.String `tfsdk:"node_id"`
-	Host     types.String `tfsdk:"host"`
-	Port     types.Int64  `tfsdk:"port"`
-	Username types.String `tfsdk:"username"`
-	Password types.String `tfsdk:"password"`
-	Status   types.String `tfsdk:"status"`
+	ID        types.String `tfsdk:"id"`
+	NodeID    types.String `tfsdk:"node_id"`
+	Host      types.String `tfsdk:"host"`
+	Port      types.Int64  `tfsdk:"port"`
+	Username  types.String `tfsdk:"username"`
+	Password  types.String `tfsdk:"password"`
+	SkipCheck types.Bool   `tfsdk:"skip_check"`
+	Status    types.String `tfsdk:"status"`
 }
 
 func (r *SMTPRelayResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -54,7 +55,7 @@ func (r *SMTPRelayResource) Metadata(_ context.Context, req resource.MetadataReq
 
 func (r *SMTPRelayResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per `node_id`; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (`apicp_mail_relay`, `apicp_mail_domain.relay_id`); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an `apicp_mail_relay` that has `default = true`, not both. Removing it is refused while mail domains name the default relay by its ID.",
+		MarkdownDescription: "Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per `node_id`; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (`apicp_mail_relay`, `apicp_mail_domain.relay_id`); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an `apicp_mail_relay` that has `default = true`, not both. Removing it is refused while mail domains name the default relay by its ID or the node has other relays; it is the one way to remove a node's last relay (back to sending directly). apicp v0.8.0 connects to the relay from the node before saving it unless `skip_check` is set.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -82,6 +83,10 @@ func (r *SMTPRelayResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Optional:            true,
 				Sensitive:           true,
 				MarkdownDescription: "SASL auth password. Set together with `username`, or omit both. apicp never returns this back out (not even redacted-vs-set, no drift detection possible on this field) - it's write-only from Terraform's point of view.",
+			},
+			"skip_check": schema.BoolAttribute{
+				Optional:            true,
+				MarkdownDescription: "Save the relay without apicp first connecting to it from the node (apicp v0.8.0 checks a relay answers SMTP with STARTTLS before saving it). Older apicpd ignores it.",
 			},
 			"status": schema.StringAttribute{Computed: true},
 		},
@@ -146,7 +151,7 @@ func (r *SMTPRelayResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	relay, err := r.client.EnableSMTPRelay(plan.NodeID.ValueString(), plan.Host.ValueString(), plan.Port.ValueInt64(), plan.Username.ValueString(), plan.Password.ValueString())
+	relay, err := r.client.EnableSMTPRelay(plan.NodeID.ValueString(), plan.Host.ValueString(), plan.Port.ValueInt64(), plan.Username.ValueString(), plan.Password.ValueString(), plan.SkipCheck.ValueBool())
 	if err != nil {
 		resp.Diagnostics.AddError("Error enabling smtp relay", err.Error())
 		return
@@ -185,7 +190,7 @@ func (r *SMTPRelayResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	relay, err := r.client.EnableSMTPRelay(plan.NodeID.ValueString(), plan.Host.ValueString(), plan.Port.ValueInt64(), plan.Username.ValueString(), plan.Password.ValueString())
+	relay, err := r.client.EnableSMTPRelay(plan.NodeID.ValueString(), plan.Host.ValueString(), plan.Port.ValueInt64(), plan.Username.ValueString(), plan.Password.ValueString(), plan.SkipCheck.ValueBool())
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating smtp relay", err.Error())
 		return
