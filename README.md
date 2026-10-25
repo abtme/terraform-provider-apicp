@@ -58,7 +58,8 @@ syntax, is published on the
 | [`apicp_dkim`](docs/resources/dkim.md) | DKIM signing for a `apicp_mail_domain`. |
 | [`apicp_antispam`](docs/resources/antispam.md) | Node-wide Rspamd toggle. |
 | [`apicp_antivirus`](docs/resources/antivirus.md) | Node-wide ClamAV toggle. |
-| [`apicp_smtp_relay`](docs/resources/smtp_relay.md) | A node's outbound SMTP smarthost/relay config. |
+| [`apicp_smtp_relay`](docs/resources/smtp_relay.md) | A node's default outbound SMTP smarthost/relay. |
+| [`apicp_mail_relay`](docs/resources/mail_relay.md) | One of a node's named outbound relays (apicp v0.8.0): the default, or one that mail domains pick with `relay_id`. |
 | [`apicp_firewall`](docs/resources/firewall.md) | Node-wide firewall enable/disable. |
 | [`apicp_firewall_rule`](docs/resources/firewall_rule.md) | One firewall rule. |
 | [`apicp_account`](docs/resources/account.md) | A tenancy account (admin/reseller/user). |

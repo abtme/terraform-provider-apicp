@@ -3,12 +3,12 @@
 page_title: "apicp_smtp_relay Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
-  Configures a node's outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per node_id; applying new values replaces the node's existing relay config in place (same node, same resource).
+  Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per node_id; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (apicp_mail_relay, apicp_mail_domain.relay_id); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an apicp_mail_relay that has default = true, not both. Removing it is refused while mail domains name the default relay by its ID.
 ---
 
 # apicp_smtp_relay (Resource)
 
-Configures a node's outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per `node_id`; applying new values replaces the node's existing relay config in place (same node, same resource).
+Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per `node_id`; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (`apicp_mail_relay`, `apicp_mail_domain.relay_id`); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an `apicp_mail_relay` that has `default = true`, not both. Removing it is refused while mail domains name the default relay by its ID.
 
 ## Example Usage
 
@@ -38,8 +38,9 @@ variable "smtp_relay_password" {
 }
 
 # Or a relay that accepts mail by source address (an internal relay, an ISP smart host): omit both
-# username and password. There is no SASL; TLS is used when the relay offers it. One relay per node,
-# so use one of the two resources, not both.
+# username and password. There is no SASL; TLS is used when the relay offers it. apicp_smtp_relay is
+# the node's one default relay, so use one of the two resources, not both. More relays, for chosen
+# mail domains: apicp_mail_relay (apicp v0.8.0 or later).
 #
 # resource "apicp_smtp_relay" "internal" {
 #   node_id = var.mail_node_id

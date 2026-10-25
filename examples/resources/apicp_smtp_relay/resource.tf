@@ -23,8 +23,9 @@ variable "smtp_relay_password" {
 }
 
 # Or a relay that accepts mail by source address (an internal relay, an ISP smart host): omit both
-# username and password. There is no SASL; TLS is used when the relay offers it. One relay per node,
-# so use one of the two resources, not both.
+# username and password. There is no SASL; TLS is used when the relay offers it. apicp_smtp_relay is
+# the node's one default relay, so use one of the two resources, not both. More relays, for chosen
+# mail domains: apicp_mail_relay (apicp v0.8.0 or later).
 #
 # resource "apicp_smtp_relay" "internal" {
 #   node_id = var.mail_node_id

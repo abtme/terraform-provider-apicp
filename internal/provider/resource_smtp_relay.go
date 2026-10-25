@@ -54,7 +54,7 @@ func (r *SMTPRelayResource) Metadata(_ context.Context, req resource.MetadataReq
 
 func (r *SMTPRelayResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Configures a node's outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per `node_id`; applying new values replaces the node's existing relay config in place (same node, same resource).",
+		MarkdownDescription: "Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per `node_id`; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (`apicp_mail_relay`, `apicp_mail_domain.relay_id`); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an `apicp_mail_relay` that has `default = true`, not both. Removing it is refused while mail domains name the default relay by its ID.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
