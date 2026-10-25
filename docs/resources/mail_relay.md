@@ -3,37 +3,34 @@
 page_title: "apicp_mail_relay Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
-  One outbound relay (smart host) of an apicp node. A node can have several (apicp v0.8.0 or later): the default one carries all outgoing mail, and a mail domain whose relay_id names another relay sends through that one instead (mail whose envelope sender is in the domain; bounces and every other sender use the default). With a login apicp requires TLS to the relay; without one TLS is used when the relay offers it; port 465 is TLS from the first byte. apicp_smtp_relay manages the node's default relay too: use one or the other for the default relay of a node, not both. apicp refuses to delete a relay while mail domains use it.
+  One outbound relay (smart host) of an apicp node. A node can have several (apicp v0.8.0 or later): the default one carries all outgoing mail, and a mail domain whose relay_id names another relay sends through that one instead (mail whose envelope sender is in the domain; bounces and every other sender use the default). All relays of a node share Postfix's one TLS setting (the default relay's: STARTTLS when offered, required with a login), so a relay a mail domain uses must have no login and not be on port 465 (apicp refuses it). A node with relays always has exactly one default, and its first relay is it. apicp connects to a relay from the node before saving it (an SMTP greeting and STARTTLS) unless skip_check is set. Deleting is refused while mail domains use the relay, for the node's only relay, and for the default while other relays exist (make another one the default first, in the same or an earlier apply). To stop relaying altogether, the last relay goes with apicp_smtp_relay's destroy (DELETE /v1/nodes/{id}/smtp-relay), or remove it from state (terraform state rm). apicp_smtp_relay manages the node's default relay too: use one or the other for the default relay of a node, not both.
 ---
 
 # apicp_mail_relay (Resource)
 
-One outbound relay (smart host) of an apicp node. A node can have several (apicp v0.8.0 or later): the `default` one carries all outgoing mail, and a mail domain whose `relay_id` names another relay sends through that one instead (mail whose envelope sender is in the domain; bounces and every other sender use the default). With a login apicp requires TLS to the relay; without one TLS is used when the relay offers it; port 465 is TLS from the first byte. `apicp_smtp_relay` manages the node's default relay too: use one or the other for the default relay of a node, not both. apicp refuses to delete a relay while mail domains use it.
+One outbound relay (smart host) of an apicp node. A node can have several (apicp v0.8.0 or later): the `default` one carries all outgoing mail, and a mail domain whose `relay_id` names another relay sends through that one instead (mail whose envelope sender is in the domain; bounces and every other sender use the default). All relays of a node share Postfix's one TLS setting (the default relay's: STARTTLS when offered, required with a login), so a relay a mail domain uses must have no login and not be on port 465 (apicp refuses it). A node with relays always has exactly one default, and its first relay is it. apicp connects to a relay from the node before saving it (an SMTP greeting and STARTTLS) unless `skip_check` is set. Deleting is refused while mail domains use the relay, for the node's only relay, and for the default while other relays exist (make another one the default first, in the same or an earlier apply). To stop relaying altogether, the last relay goes with `apicp_smtp_relay`'s destroy (`DELETE /v1/nodes/{id}/smtp-relay`), or remove it from state (`terraform state rm`). `apicp_smtp_relay` manages the node's default relay too: use one or the other for the default relay of a node, not both.
 
 ## Example Usage
 
 ```terraform
 # The node's default relay: all outgoing mail, except that of mail domains with a relay of their own.
-# (Or manage the default relay with apicp_smtp_relay - one or the other per node, not both.)
+# The node's first relay is always its default. (Or manage the default relay with apicp_smtp_relay -
+# one or the other per node, not both.)
 resource "apicp_mail_relay" "main" {
-  node_id  = "node-1"
-  name     = "main"
-  host     = "smtp.example-relay.com"
-  port     = 587
-  username = "relay-user"
-  password = var.main_relay_password
-  default  = true
+  node_id = "node-1"
+  name    = "main"
+  host    = "relay.example.net"
+  port    = 2500
+  default = true
 }
 
-# Another relay, used only by the mail domains that name it (relay_id). Port 465 is TLS from the
-# first byte.
+# Another relay, used only by the mail domains that name it (relay_id). It accepts the server by its
+# address: a relay a mail domain uses has no login and is not on port 465.
 resource "apicp_mail_relay" "shop" {
-  node_id  = "node-1"
-  name     = "shop"
-  host     = "smtps.other-provider.example"
-  port     = 465
-  username = "shop-sender"
-  password = var.shop_relay_password
+  node_id = "node-1"
+  name    = "shop"
+  host    = "relay.shop-provider.example"
+  port    = 2525
 }
 
 # Mail whose sender is @shop.example goes out through the shop relay; bounces and every other
@@ -41,16 +38,6 @@ resource "apicp_mail_relay" "shop" {
 resource "apicp_mail_domain" "shop" {
   name     = "shop.example"
   relay_id = apicp_mail_relay.shop.id
-}
-
-variable "main_relay_password" {
-  type      = string
-  sensitive = true
-}
-
-variable "shop_relay_password" {
-  type      = string
-  sensitive = true
 }
 ```
 
@@ -62,13 +49,14 @@ variable "shop_relay_password" {
 - `host` (String) The relay's host name or IPv4 address.
 - `name` (String) Name, unique among the node's relays: 1-63 lower-case letters, digits, `.`, `-` or `_`.
 - `node_id` (String) ID of the apicp node (see `GET /v1/nodes`; the server's own node on a single-server install, e.g. `node-1`). Changing this replaces the resource.
-- `port` (Number) The relay's port (typically 587, or 465 for TLS from the first byte).
+- `port` (Number) The relay's port (e.g. 25, 587, 2525; 465, TLS from the first byte, only for a default relay while no mail domain has a relay of its own).
 
 ### Optional
 
-- `default` (Boolean) Make this the node's default relay (the one that was default stops being it). Default `false`: a relay that is not the default is only used by the mail domains that name it. Set it on at most one relay of a node.
+- `default` (Boolean) Make this the node's default relay (the one that was default stops being it; the mail domains without a relay of their own follow at once). Left out, it shows what apicp has: the node's first relay is always the default, a later one is not. `false` on the node's first relay, or on the default relay, is an error (a node with relays always has a default: set `default = true` on another relay instead). Set it on at most one relay of a node.
 - `password` (String, Sensitive) SASL password. Set together with `username`, or omit both. apicp never returns it (write-only: no drift detection), and the provider sends it again with every change, since apicp only sends a stored password to the host it was given for.
-- `username` (String) SASL login for the relay. Set `username` and `password` together, or omit both for a relay that accepts mail by the server's address (an empty string is not accepted: omit the attribute).
+- `skip_check` (Boolean) Save the relay without apicp first connecting to it from the node (for a relay that is not reachable yet). Only used when the relay is created or its host or port change.
+- `username` (String) SASL login for the relay - only for the default relay (a relay a mail domain uses accepts the server by its address). Set `username` and `password` together, or omit both (an empty string is not accepted: omit the attribute).
 
 ### Read-Only
 

@@ -3,12 +3,12 @@
 page_title: "apicp_smtp_relay Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
-  Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per node_id; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (apicp_mail_relay, apicp_mail_domain.relay_id); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an apicp_mail_relay that has default = true, not both. Removing it is refused while mail domains name the default relay by its ID.
+  Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per node_id; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (apicp_mail_relay, apicp_mail_domain.relay_id); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an apicp_mail_relay that has default = true, not both. Removing it is refused while mail domains name the default relay by its ID or the node has other relays; it is the one way to remove a node's last relay (back to sending directly). apicp v0.8.0 connects to the relay from the node before saving it unless skip_check is set.
 ---
 
 # apicp_smtp_relay (Resource)
 
-Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per `node_id`; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (`apicp_mail_relay`, `apicp_mail_domain.relay_id`); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an `apicp_mail_relay` that has `default = true`, not both. Removing it is refused while mail domains name the default relay by its ID.
+Configures a node's default outbound SMTP smarthost/relay (PLAN.md §2) - sending mail directly from a hosting node is a deliverability liability, so every node's Postfix should relay through a real smarthost instead. At most one per `node_id`; applying new values replaces the node's existing relay config in place (same node, same resource). Since apicp v0.8.0 a node can have more relays, for chosen mail domains (`apicp_mail_relay`, `apicp_mail_domain.relay_id`); this resource is the default one, which carries all other mail. Manage a node's default relay with this resource or with an `apicp_mail_relay` that has `default = true`, not both. Removing it is refused while mail domains name the default relay by its ID or the node has other relays; it is the one way to remove a node's last relay (back to sending directly). apicp v0.8.0 connects to the relay from the node before saving it unless `skip_check` is set.
 
 ## Example Usage
 
@@ -61,6 +61,7 @@ variable "smtp_relay_password" {
 ### Optional
 
 - `password` (String, Sensitive) SASL auth password. Set together with `username`, or omit both. apicp never returns this back out (not even redacted-vs-set, no drift detection possible on this field) - it's write-only from Terraform's point of view.
+- `skip_check` (Boolean) Save the relay without apicp first connecting to it from the node (apicp v0.8.0 checks a relay answers SMTP with STARTTLS before saving it). Older apicpd ignores it.
 - `username` (String) SASL auth username for the smarthost. Set `username` and `password` together, or omit both for a relay that accepts mail by source address without a login (an empty string is not accepted: omit the attribute). With a login apicp requires TLS to the relay; without one TLS is used when the relay offers it (port 465 is always TLS from the first byte).
 
 ### Read-Only
