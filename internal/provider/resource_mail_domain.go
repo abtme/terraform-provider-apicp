@@ -31,6 +31,7 @@ type MailDomainResourceModel struct {
 	DisableIMAP      types.Bool   `tfsdk:"disable_imap"`
 	DisablePOP3      types.Bool   `tfsdk:"disable_pop3"`
 	MaxEmailsPerHour types.Int64  `tfsdk:"max_emails_per_hour"`
+	RelayID          types.String `tfsdk:"relay_id"`
 	Status           types.String `tfsdk:"status"`
 }
 
@@ -77,9 +78,34 @@ func (r *MailDomainResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Default:             int64default.StaticInt64(0),
 				MarkdownDescription: "Outgoing mail (recipients) from this domain's mailboxes and its website over a rolling hour, on top of the account's package `max_emails_per_hour`. Mail over it is refused for now (451): a website's mail stays queued and goes out later by itself, a mail program keeps it in its Outbox to send again. `0` (default) = unlimited.",
 			},
+			"relay_id": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "ID of the relay (an `apicp_mail_relay`, or the default relay's ID) this domain's outgoing mail goes through: mail whose envelope sender is in this domain. `\"\"` = the server's default relay (bounces and every other sender always use that one). Leave it out to leave the relay as it is on the server (the panel and `apicp maildomain relay` set it too) - it then shows the server's value. Only an admin account's token may set it. Needs apicp v0.8.0 or later.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
 			"status": schema.StringAttribute{Computed: true},
 		},
 	}
+}
+
+// wantRelay is the relay_id the plan asks for, or nil when it leaves the relay as it is.
+func (m *MailDomainResourceModel) wantRelay() *string {
+	if m.RelayID.IsNull() || m.RelayID.IsUnknown() {
+		return nil
+	}
+	v := m.RelayID.ValueString()
+	return &v
+}
+
+// relayTooOld is the error when apicpd took the request but did not set the
+// relay: apicpd before v0.8.0 ignores relay_id.
+func relayTooOld(want string, d *client.MailDomain) (string, bool) {
+	if d.RelayID == want {
+		return "", false
+	}
+	return fmt.Sprintf("apicpd did not set relay_id %q (it reports %q): relays per mail domain need apicp v0.8.0 or later. "+
+		"Upgrade apicpd, or remove relay_id from the configuration.", want, d.RelayID), true
 }
 
 func (r *MailDomainResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -101,6 +127,7 @@ func (r *MailDomainResource) applyDomain(d *client.MailDomain, m *MailDomainReso
 	m.DisableIMAP = types.BoolValue(d.DisableIMAP)
 	m.DisablePOP3 = types.BoolValue(d.DisablePOP3)
 	m.MaxEmailsPerHour = types.Int64Value(int64(d.MaxEmailsPerHour))
+	m.RelayID = types.StringValue(d.RelayID)
 	m.Status = types.StringValue(d.Status)
 }
 
@@ -111,13 +138,21 @@ func (r *MailDomainResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	d, err := r.client.CreateMailDomain(plan.Name.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()))
+	relay := ""
+	if want := plan.wantRelay(); want != nil {
+		relay = *want
+	}
+	d, err := r.client.CreateMailDomain(plan.Name.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()), relay)
 	if err != nil {
-		resp.Diagnostics.AddError("Error creating mail domain", err.Error())
+		resp.Diagnostics.AddError("Error creating mail domain", errorDetail(err))
 		return
 	}
 	r.applyDomain(d, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	// The domain exists (in state, so Terraform marks it tainted and replaces it next time).
+	if detail, old := relayTooOld(relay, d); old {
+		resp.Diagnostics.AddAttributeError(path.Root("relay_id"), "relay_id not supported", detail)
+	}
 }
 
 func (r *MailDomainResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -140,8 +175,8 @@ func (r *MailDomainResource) Read(ctx context.Context, req resource.ReadRequest,
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-// Update - name requires replace, so only the protocol switches and the
-// sending limit change here.
+// Update - name requires replace, so only the protocol switches, the
+// sending limit and the relay change here.
 func (r *MailDomainResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan, state MailDomainResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -149,10 +184,21 @@ func (r *MailDomainResource) Update(ctx context.Context, req resource.UpdateRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	d, err := r.client.UpdateMailDomain(state.ID.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()))
+	// relay_id is sent only when it changes, so other changes work on an apicpd before v0.8.0.
+	relay := plan.wantRelay()
+	if relay != nil && *relay == state.RelayID.ValueString() {
+		relay = nil
+	}
+	d, err := r.client.UpdateMailDomain(state.ID.ValueString(), plan.protocols(), int(plan.MaxEmailsPerHour.ValueInt64()), relay)
 	if err != nil {
-		resp.Diagnostics.AddError("Error updating mail domain", err.Error())
+		resp.Diagnostics.AddError("Error updating mail domain", errorDetail(err))
 		return
+	}
+	if relay != nil {
+		if detail, old := relayTooOld(*relay, d); old {
+			resp.Diagnostics.AddAttributeError(path.Root("relay_id"), "relay_id not supported", detail)
+			return
+		}
 	}
 	r.applyDomain(d, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)

@@ -11,9 +11,12 @@ type MailDomain struct {
 	Name     string `json:"name"`
 	UnixUser string `json:"unix_user"`
 	Protocols
-	MaxEmailsPerHour int    `json:"max_emails_per_hour"`
-	Status           string `json:"status"`
-	Error            string `json:"error,omitempty"`
+	MaxEmailsPerHour int `json:"max_emails_per_hour"`
+	// RelayID is the relay the domain's outgoing mail goes through ("" = the
+	// server's default relay). apicpd before v0.8.0 does not return it.
+	RelayID string `json:"relay_id,omitempty"`
+	Status  string `json:"status"`
+	Error   string `json:"error,omitempty"`
 }
 
 // Protocols mirrors apicp's mail.Protocols: which login protocols are
@@ -27,11 +30,15 @@ type mailDomainCreateRequest struct {
 	Name string `json:"name"`
 	Protocols
 	MaxEmailsPerHour int `json:"max_emails_per_hour"`
+	// RelayID is only sent when set: an apicpd before v0.8.0 does not know it.
+	RelayID string `json:"relay_id,omitempty"`
 }
 
-func (c *Client) CreateMailDomain(name string, p Protocols, maxEmailsPerHour int) (*MailDomain, error) {
+// CreateMailDomain implements POST /v1/mail/domains; relayID "" = the
+// server's default relay (and the field is left out).
+func (c *Client) CreateMailDomain(name string, p Protocols, maxEmailsPerHour int, relayID string) (*MailDomain, error) {
 	var d MailDomain
-	if err := c.Post("/v1/mail/domains", mailDomainCreateRequest{Name: name, Protocols: p, MaxEmailsPerHour: maxEmailsPerHour}, &d); err != nil {
+	if err := c.Post("/v1/mail/domains", mailDomainCreateRequest{Name: name, Protocols: p, MaxEmailsPerHour: maxEmailsPerHour, RelayID: relayID}, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
@@ -39,14 +46,17 @@ func (c *Client) CreateMailDomain(name string, p Protocols, maxEmailsPerHour int
 
 type mailDomainUpdateRequest struct {
 	Protocols
-	MaxEmailsPerHour int `json:"max_emails_per_hour"`
+	MaxEmailsPerHour int     `json:"max_emails_per_hour"`
+	RelayID          *string `json:"relay_id,omitempty"`
 }
 
 // UpdateMailDomain implements PATCH /v1/mail/domains/{id}, sending every
-// mutable field.
-func (c *Client) UpdateMailDomain(id string, p Protocols, maxEmailsPerHour int) (*MailDomain, error) {
+// mutable field - relay_id only when relayID is not nil (a change of relay:
+// "" = back to the default relay), so an update that does not touch the
+// relay works on an apicpd before v0.8.0 too.
+func (c *Client) UpdateMailDomain(id string, p Protocols, maxEmailsPerHour int, relayID *string) (*MailDomain, error) {
 	var d MailDomain
-	if err := c.Patch("/v1/mail/domains/"+id, mailDomainUpdateRequest{Protocols: p, MaxEmailsPerHour: maxEmailsPerHour}, &d); err != nil {
+	if err := c.Patch("/v1/mail/domains/"+id, mailDomainUpdateRequest{Protocols: p, MaxEmailsPerHour: maxEmailsPerHour, RelayID: relayID}, &d); err != nil {
 		return nil, err
 	}
 	return &d, nil
