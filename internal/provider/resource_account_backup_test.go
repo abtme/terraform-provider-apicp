@@ -2,9 +2,12 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,55 +18,269 @@ import (
 	"github.com/abtme/terraform-provider-apicp/internal/client"
 )
 
-// Create waits for apicp's backup run and keeps a run warning as a warning,
-// not an error: the backup was made.
-func TestAccountBackupCreateWaitsAndWarns(t *testing.T) {
+func fastBackupPoll(t *testing.T) {
+	t.Helper()
 	old := client.AccountBackupPollInterval
 	client.AccountBackupPollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { client.AccountBackupPollInterval = old })
+}
 
+// fakeAccountBackups is apicpd's account backup API for acct_1: POST starts
+// arun_1, which finishes with run; the list is stored; DELETE removes from it.
+type fakeAccountBackups struct {
+	mu      sync.Mutex
+	run     string           // the finished run's JSON
+	stored  []map[string]any // GET /v1/accounts/acct_1/backups
+	deleted []string
+}
+
+func (f *fakeAccountBackups) client(t *testing.T) *client.Client {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		const base = "/v1/accounts/acct_1/backups"
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/accounts/acct_1/backups":
+		case r.Method == http.MethodPost && r.URL.Path == base:
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"run_id":"arun_1","account_id":"acct_1","status":"running","stage":"starting"}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/accounts/acct_1/backups/runs/arun_1":
-			_, _ = w.Write([]byte(`{"run_id":"arun_1","account_id":"acct_1","status":"finished","warning":"old backups could not be removed",
-				"backup":{"id":"bkp_1","account_id":"acct_1","created_at":"2026-10-22T10:00:00Z","size_bytes":42}}`))
+		case r.Method == http.MethodGet && r.URL.Path == base+"/runs/arun_1":
+			_, _ = w.Write([]byte(f.run))
+		case r.Method == http.MethodGet && r.URL.Path == base:
+			_ = json.NewEncoder(w).Encode(map[string]any{"backups": f.stored})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, base+"/"):
+			id := strings.TrimPrefix(r.URL.Path, base+"/")
+			for i, b := range f.stored {
+				if b["id"] == id {
+					f.stored = append(f.stored[:i:i], f.stored[i+1:]...)
+					f.deleted = append(f.deleted, id)
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"backup not found"}`))
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
 	t.Cleanup(srv.Close)
+	return client.New(srv.URL, "token")
+}
 
-	r := &AccountBackupResource{client: client.New(srv.URL, "token")}
-	var sch resource.SchemaResponse
-	r.Schema(context.Background(), resource.SchemaRequest{}, &sch)
+func perDomainArchives() []map[string]any {
+	return []map[string]any{
+		{"id": "bkp_s", "account_id": "acct_1", "created_at": "2026-10-25T10:00:00Z", "size_bytes": 10, "scope": "account", "file": "manual/root._.alice.acct_1.t.bkp_s.tar.gz"},
+		{"id": "bkp_w", "account_id": "acct_1", "created_at": "2026-10-25T10:00:05Z", "size_bytes": 200, "scope": "domain-web", "domain": "alice.example", "file": "manual/root._.alice.alice.example.web.t.bkp_w.tar.gz"},
+		{"id": "bkp_m", "account_id": "acct_1", "created_at": "2026-10-25T10:00:09Z", "size_bytes": 30, "scope": "domain-mail", "domain": "alice.example", "file": "manual/root._.alice.alice.example.mail.t.bkp_m.tar.gz"},
+	}
+}
 
-	typ := tftypes.Object{AttributeTypes: map[string]tftypes.Type{
-		"id": tftypes.String, "account_id": tftypes.String, "created_at": tftypes.String, "size_bytes": tftypes.Number,
-	}}
-	unknown := func(ty tftypes.Type) tftypes.Value { return tftypes.NewValue(ty, tftypes.UnknownValue) }
-	plan := tfsdk.Plan{Schema: sch.Schema, Raw: tftypes.NewValue(typ, map[string]tftypes.Value{
-		"id": unknown(tftypes.String), "account_id": tftypes.NewValue(tftypes.String, "acct_1"),
-		"created_at": unknown(tftypes.String), "size_bytes": unknown(tftypes.Number),
-	})}
+func perDomainRun(t *testing.T, warnings []string) string {
+	t.Helper()
+	all := perDomainArchives()
+	b, err := json.Marshal(map[string]any{"run_id": "arun_1", "account_id": "acct_1", "status": "finished",
+		"backup": all[0], "backups": all, "warnings": warnings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
 
-	resp := resource.CreateResponse{State: tfsdk.State{Schema: sch.Schema, Raw: tftypes.NewValue(typ, nil)}}
+func nullState(sch tfsdk.State) tfsdk.State {
+	sch.Raw = tftypes.NewValue(sch.Schema.Type().TerraformType(context.Background()), nil)
+	return sch
+}
+
+func accountBackupCreate(t *testing.T, f *fakeAccountBackups) (resource.CreateResponse, AccountBackupResourceModel) {
+	t.Helper()
+	r := &AccountBackupResource{client: f.client(t)}
+	sch := resourceSchema(t, r)
+	plan := tfsdk.Plan{Schema: sch, Raw: objectValue(t, sch, map[string]any{"id": unknownValue{}, "account_id": "acct_1",
+		"created_at": unknownValue{}, "size_bytes": unknownValue{}, "run_id": unknownValue{}, "backups": unknownValue{}})}
+	resp := resource.CreateResponse{State: nullState(tfsdk.State{Schema: sch})}
 	r.Create(context.Background(), resource.CreateRequest{Plan: plan}, &resp)
+	var got AccountBackupResourceModel
+	if !resp.Diagnostics.HasError() {
+		resp.Diagnostics.Append(resp.State.Get(context.Background(), &got)...)
+	}
+	return resp, got
+}
 
+func archivesOf(t *testing.T, m AccountBackupResourceModel) []accountBackupArchive {
+	t.Helper()
+	var out []accountBackupArchive
+	if d := m.Backups.ElementsAs(context.Background(), &out, false); d.HasError() {
+		t.Fatal(d)
+	}
+	return out
+}
+
+func stateOf(t *testing.T, r *AccountBackupResource, m AccountBackupResourceModel) tfsdk.State {
+	t.Helper()
+	st := tfsdk.State{Schema: resourceSchema(t, r)}
+	st = nullState(st)
+	if d := st.Set(context.Background(), &m); d.HasError() {
+		t.Fatal(d)
+	}
+	return st
+}
+
+// Create waits for apicp's backup run and keeps a run warning as a warning,
+// not an error: the backup was made.
+func TestAccountBackupCreateWaitsAndWarns(t *testing.T) {
+	fastBackupPoll(t)
+	f := &fakeAccountBackups{run: `{"run_id":"arun_1","account_id":"acct_1","status":"finished","warning":"old backups could not be removed",
+		"backup":{"id":"bkp_1","account_id":"acct_1","created_at":"2026-10-22T10:00:00Z","size_bytes":42}}`}
+	resp, got := accountBackupCreate(t, f)
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("diagnostics: %v", resp.Diagnostics)
 	}
 	if resp.Diagnostics.WarningsCount() != 1 || !strings.Contains(resp.Diagnostics.Warnings()[0].Detail(), "old backups could not be removed") {
 		t.Errorf("want one warning about the prune, got %v", resp.Diagnostics)
 	}
+	// an apicpd with one archive per account: the old attributes as before, backups holds that one
+	a := archivesOf(t, got)
+	if got.ID.ValueString() != "bkp_1" || got.SizeBytes.ValueInt64() != 42 || got.AccountID.ValueString() != "acct_1" || got.RunID.ValueString() != "arun_1" ||
+		len(a) != 1 || a[0].ID.ValueString() != "bkp_1" || a[0].Scope.ValueString() != "" || !a[0].Verified.IsNull() {
+		t.Errorf("state = %+v, archives %+v", got, a)
+	}
+}
 
+func TestAccountBackupCreatePerDomain(t *testing.T) {
+	fastBackupPoll(t)
+	f := &fakeAccountBackups{run: perDomainRun(t, []string{"root._.alice.alice.example.mail.tar.gz: mailbox a: password not readable"})}
+	resp, got := accountBackupCreate(t, f)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+	if resp.Diagnostics.WarningsCount() != 1 || !strings.Contains(resp.Diagnostics.Warnings()[0].Detail(), "password not readable") {
+		t.Errorf("want the archive warning, got %v", resp.Diagnostics)
+	}
+	a := archivesOf(t, got)
+	if got.ID.ValueString() != "bkp_s" || got.SizeBytes.ValueInt64() != 240 || got.CreatedAt.ValueString() != "2026-10-25T10:00:00Z" || len(a) != 3 {
+		t.Fatalf("state = %+v (%d archives)", got, len(a))
+	}
+	if a[1].ID.ValueString() != "bkp_w" || a[1].Scope.ValueString() != "domain-web" || a[1].Domain.ValueString() != "alice.example" ||
+		a[1].Name.ValueString() != "manual/root._.alice.alice.example.web.t.bkp_w.tar.gz" || a[1].SizeBytes.ValueInt64() != 200 {
+		t.Errorf("archive 1 = %+v", a[1])
+	}
+}
+
+// Read keeps the archives still on the server; the resource is gone once none is.
+func TestAccountBackupReadFollowsRetention(t *testing.T) {
+	fastBackupPoll(t)
+	f := &fakeAccountBackups{run: perDomainRun(t, nil)}
+	_, created := accountBackupCreate(t, f)
+	r := &AccountBackupResource{client: f.client(t)}
+	state := stateOf(t, r, created)
+
+	all := perDomainArchives()
+	f.stored = []map[string]any{{"id": "bkp_other", "account_id": "acct_1"}, all[0], all[2]} // bkp_w pruned
+	resp := resource.ReadResponse{State: state}
+	r.Read(context.Background(), resource.ReadRequest{State: state}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
 	var got AccountBackupResourceModel
-	resp.Diagnostics.Append(resp.State.Get(context.Background(), &got)...)
-	if got.ID.ValueString() != "bkp_1" || got.SizeBytes.ValueInt64() != 42 || got.AccountID.ValueString() != "acct_1" {
+	resp.State.Get(context.Background(), &got)
+	a := archivesOf(t, got)
+	if len(a) != 2 || a[0].ID.ValueString() != "bkp_s" || a[1].ID.ValueString() != "bkp_m" || got.SizeBytes.ValueInt64() != 40 || got.RunID.ValueString() != "arun_1" {
+		t.Errorf("state = %+v, archives %+v", got, a)
+	}
+
+	f.stored = f.stored[:1] // only someone else's backup left
+	resp = resource.ReadResponse{State: state}
+	r.Read(context.Background(), resource.ReadRequest{State: state}, &resp)
+	if resp.Diagnostics.HasError() || !resp.State.Raw.IsNull() {
+		t.Errorf("want the resource removed: %v, %v", resp.Diagnostics, resp.State.Raw)
+	}
+}
+
+// State from before backups existed (id only) still reads and deletes.
+func TestAccountBackupOldState(t *testing.T) {
+	f := &fakeAccountBackups{stored: []map[string]any{{"id": "bkp_1", "account_id": "acct_1", "created_at": "2026-10-01T00:00:00Z", "size_bytes": 5}}}
+	r := &AccountBackupResource{client: f.client(t)}
+	sch := resourceSchema(t, r)
+	state := tfsdk.State{Schema: sch, Raw: objectValue(t, sch, map[string]any{"id": "bkp_1", "account_id": "acct_1",
+		"created_at": "2026-10-01T00:00:00Z", "size_bytes": 5})}
+
+	resp := resource.ReadResponse{State: state}
+	r.Read(context.Background(), resource.ReadRequest{State: state}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+	var got AccountBackupResourceModel
+	resp.State.Get(context.Background(), &got)
+	if a := archivesOf(t, got); len(a) != 1 || a[0].ID.ValueString() != "bkp_1" || got.RunID.ValueString() != "" || got.SizeBytes.ValueInt64() != 5 {
 		t.Errorf("state = %+v", got)
+	}
+
+	var dresp resource.DeleteResponse
+	r.Delete(context.Background(), resource.DeleteRequest{State: state}, &dresp)
+	if dresp.Diagnostics.HasError() || len(f.deleted) != 1 || f.deleted[0] != "bkp_1" {
+		t.Errorf("delete: %v, deleted %v", dresp.Diagnostics, f.deleted)
+	}
+}
+
+// Destroy deletes every archive; one already gone is fine.
+func TestAccountBackupDeleteRemovesEveryArchive(t *testing.T) {
+	fastBackupPoll(t)
+	f := &fakeAccountBackups{run: perDomainRun(t, nil)}
+	_, created := accountBackupCreate(t, f)
+	all := perDomainArchives()
+	f.stored = []map[string]any{all[0], all[2]} // bkp_w already gone
+	r := &AccountBackupResource{client: f.client(t)}
+	state := stateOf(t, r, created)
+
+	var resp resource.DeleteResponse
+	r.Delete(context.Background(), resource.DeleteRequest{State: state}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+	sort.Strings(f.deleted)
+	if strings.Join(f.deleted, ",") != "bkp_m,bkp_s" || len(f.stored) != 0 {
+		t.Errorf("deleted %v, left %v", f.deleted, f.stored)
+	}
+}
+
+func TestAccountBackupImport(t *testing.T) {
+	f := &fakeAccountBackups{run: perDomainRun(t, nil), stored: perDomainArchives()}
+	r := &AccountBackupResource{client: f.client(t)}
+	sch := resourceSchema(t, r)
+
+	for id, want := range map[string][]string{
+		"acct_1/bkp_s":             {"bkp_s"},
+		"acct_1/bkp_s,bkp_w,bkp_m": {"bkp_s", "bkp_w", "bkp_m"},
+		"acct_1/arun_1":            {"bkp_s", "bkp_w", "bkp_m"},
+	} {
+		resp := resource.ImportStateResponse{State: nullState(tfsdk.State{Schema: sch})}
+		r.ImportState(context.Background(), resource.ImportStateRequest{ID: id}, &resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("%s: %v", id, resp.Diagnostics)
+		}
+		// the read that follows an import
+		rresp := resource.ReadResponse{State: resp.State}
+		r.Read(context.Background(), resource.ReadRequest{State: resp.State}, &rresp)
+		if rresp.Diagnostics.HasError() {
+			t.Fatalf("%s read: %v", id, rresp.Diagnostics)
+		}
+		var got AccountBackupResourceModel
+		rresp.State.Get(context.Background(), &got)
+		var ids []string
+		for _, a := range archivesOf(t, got) {
+			ids = append(ids, a.ID.ValueString())
+		}
+		if strings.Join(ids, ",") != strings.Join(want, ",") || got.AccountID.ValueString() != "acct_1" || got.ID.ValueString() != "bkp_s" || got.CreatedAt.ValueString() == "" {
+			t.Errorf("%s: state %+v, archives %v", id, got, ids)
+		}
+	}
+
+	resp := resource.ImportStateResponse{State: nullState(tfsdk.State{Schema: sch})}
+	r.ImportState(context.Background(), resource.ImportStateRequest{ID: "bkp_s"}, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Error("an ID without the account must be refused")
 	}
 }

@@ -252,3 +252,49 @@ func TestCreateAccountBackupStartRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+const perDomainFinished = `{"run_id":"arun_a1","account_id":"acct_1","status":"finished","warning":"",
+	"backup":{"id":"bkp_s","account_id":"acct_1","created_at":"2026-10-25T10:00:00Z","size_bytes":10,"scope":"account","file":"manual/root._.alice.acct_1.t.bkp_s.tar.gz"},
+	"backups":[
+		{"id":"bkp_s","account_id":"acct_1","created_at":"2026-10-25T10:00:00Z","size_bytes":10,"scope":"account","file":"manual/root._.alice.acct_1.t.bkp_s.tar.gz"},
+		{"id":"bkp_w","account_id":"acct_1","created_at":"2026-10-25T10:00:05Z","size_bytes":200,"scope":"domain-web","domain":"alice.example","file":"manual/root._.alice.alice.example.web.t.bkp_w.tar.gz"},
+		{"id":"bkp_m","account_id":"acct_1","created_at":"2026-10-25T10:00:09Z","size_bytes":30,"scope":"domain-mail","domain":"alice.example","path":"manual/root._.alice.alice.example.mail.t.bkp_m","warnings":["mailbox a: password not readable"]}],
+	"warnings":["root._.alice.alice.example.mail.tar.gz: mailbox a: password not readable"]}`
+
+// Per-domain backups: one run makes several archives, all of them returned.
+func TestCreateAccountBackupPerDomainArchives(t *testing.T) {
+	fastPoll(t)
+	f := &fakeBackups{
+		posts: []reply{{202, running("arun_a1", "starting")}},
+		gets:  map[string][]reply{"arun_a1": {{200, perDomainFinished}}},
+	}
+	res, err := f.serve(t).CreateAccountBackup(context.Background(), "acct_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Backup.ID != "bkp_s" || len(res.Backups) != 3 || res.Backups[1].Scope != "domain-web" || res.Backups[1].Domain != "alice.example" {
+		t.Fatalf("result = %+v", res)
+	}
+	if res.Backups[0].Name() != "manual/root._.alice.acct_1.t.bkp_s.tar.gz" || res.Backups[2].Name() != "manual/root._.alice.alice.example.mail.t.bkp_m" {
+		t.Errorf("names = %q, %q", res.Backups[0].Name(), res.Backups[2].Name())
+	}
+	if len(res.Warnings) != 1 || res.Backups[0].Verified != nil {
+		t.Errorf("warnings %v, verified %v", res.Warnings, res.Backups[0].Verified)
+	}
+}
+
+// A run that fails part way: the error names the archives it did make (they
+// stay on the server).
+func TestCreateAccountBackupFailedRunNamesItsArchives(t *testing.T) {
+	fastPoll(t)
+	f := &fakeBackups{
+		posts: []reply{{202, running("arun_a1", "starting")}},
+		gets: map[string][]reply{"arun_a1": {{200, `{"run_id":"arun_a1","account_id":"acct_1","status":"failed",
+			"error":"1 of 3 archives failed: mail domain alice.example: disk full",
+			"backups":[{"id":"bkp_s","file":"manual/a.tar.gz"},{"id":"bkp_w"}]}`}}},
+	}
+	_, err := f.serve(t).CreateAccountBackup(context.Background(), "acct_1")
+	if err == nil || !strings.Contains(err.Error(), "disk full") || !strings.Contains(err.Error(), "bkp_s (manual/a.tar.gz), bkp_w") {
+		t.Fatalf("err = %v", err)
+	}
+}

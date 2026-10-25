@@ -7,15 +7,39 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
-// AccountBackup mirrors apicp's backup.Meta JSON shape.
+// AccountBackup mirrors apicp's backup.Meta JSON shape: one archive.
 type AccountBackup struct {
 	ID        string `json:"id"`
 	AccountID string `json:"account_id"`
 	CreatedAt string `json:"created_at"`
 	SizeBytes int64  `json:"size_bytes"`
+	// Scope is the part of the account the archive holds: "account" (its
+	// settings), "domain-web" (one website), "domain-mail" (one mail domain),
+	// or "" for a whole-account archive (apicpd before per-domain backups, or
+	// backup_unit "account").
+	Scope string `json:"scope,omitempty"`
+	// Domain is the website or mail domain of a domain-web/domain-mail archive.
+	Domain string `json:"domain,omitempty"`
+	// File is the archive's file relative to the backup folder; Path is the
+	// same without the extension (older apicpd sends only Path, or neither).
+	File string `json:"file,omitempty"`
+	Path string `json:"path,omitempty"`
+	// Verified is the restore check's result for this archive; nil when
+	// apicpd does not report one.
+	Verified *bool    `json:"verified,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// Name is the archive's file name for people: File, else Path, else "".
+func (b *AccountBackup) Name() string {
+	if b.File != "" {
+		return b.File
+	}
+	return b.Path
 }
 
 // Account backup run states (apicp's backup.AccountRun.Status).
@@ -43,11 +67,36 @@ type AccountBackupRun struct {
 	// one-off backups of the account could not be removed).
 	Warning string         `json:"warning"`
 	Backup  *AccountBackup `json:"backup"`
+	// Backups is every archive the run made (per-domain backups: the
+	// account's settings archive, then one per website and per mail domain).
+	// Empty from an apicpd that makes one archive per account.
+	Backups []AccountBackup `json:"backups"`
+	// Warnings are what the archives could not capture in full
+	// ("<file>: <warning>"); the backup still succeeded.
+	Warnings []string `json:"warnings"`
+}
+
+// Archives is every archive the run made: Backups, or Backup alone from an
+// apicpd that makes one archive per account.
+func (r *AccountBackupRun) Archives() []AccountBackup {
+	if len(r.Backups) > 0 {
+		return r.Backups
+	}
+	if r.Backup != nil && r.Backup.ID != "" {
+		return []AccountBackup{*r.Backup}
+	}
+	return nil
 }
 
 // AccountBackupResult is what CreateAccountBackup made.
 type AccountBackupResult struct {
+	// Backup is the first archive made (the account's settings archive with
+	// per-domain backups, the only one otherwise).
 	Backup *AccountBackup
+	// Backups is every archive made, Backup first.
+	Backups []AccountBackup
+	// Warnings are what the archives could not capture in full.
+	Warnings []string
 	// RunID is the run that made it; empty from an apicpd that still makes
 	// the backup within the request.
 	RunID string
@@ -107,7 +156,7 @@ func (c *Client) CreateAccountBackup(ctx context.Context, accountID string) (*Ac
 			if err := json.Unmarshal(raw, &b); err != nil {
 				return nil, fmt.Errorf("decoding the backup: %w (body: %s)", err, raw)
 			}
-			return &AccountBackupResult{Backup: &b}, nil
+			return &AccountBackupResult{Backup: &b, Backups: []AccountBackup{b}}, nil
 		}
 
 		var run AccountBackupRun
@@ -132,13 +181,29 @@ func (c *Client) CreateAccountBackup(ctx context.Context, accountID string) (*Ac
 			continue
 		}
 
+		archives := end.Archives()
 		if end.Status == AccountBackupRunFailed {
-			return nil, fmt.Errorf("the backup failed (run %s): %s", end.RunID, end.Error)
+			msg := fmt.Sprintf("the backup failed (run %s): %s", end.RunID, end.Error)
+			if len(archives) > 0 {
+				ids := make([]string, len(archives))
+				for i := range archives {
+					ids[i] = archives[i].ID
+					if n := archives[i].Name(); n != "" {
+						ids[i] += " (" + n + ")"
+					}
+				}
+				msg += fmt.Sprintf("; the %d archive(s) it did make stay on the server and are not in Terraform state: %s", len(archives), strings.Join(ids, ", "))
+			}
+			return nil, errors.New(msg)
 		}
-		if end.Backup == nil || end.Backup.ID == "" {
+		if len(archives) == 0 {
 			return nil, fmt.Errorf("backup run %s finished without saying which backup it made", end.RunID)
 		}
-		return &AccountBackupResult{Backup: end.Backup, RunID: end.RunID, Warning: end.Warning}, nil
+		first := archives[0]
+		if end.Backup != nil && end.Backup.ID != "" {
+			first = *end.Backup
+		}
+		return &AccountBackupResult{Backup: &first, Backups: archives, Warnings: end.Warnings, RunID: end.RunID, Warning: end.Warning}, nil
 	}
 }
 
@@ -208,23 +273,44 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// GetAccountBackup finds one backup in the account's list - apicp has no
-// single-backup GET. Returns ErrNotFound if the account or backup is gone.
-func (c *Client) GetAccountBackup(accountID, id string) (*AccountBackup, error) {
+// ListAccountBackups lists every backup of an account (GET
+// /v1/accounts/{id}/backups). ErrNotFound if the account is gone.
+func (c *Client) ListAccountBackups(accountID string) ([]AccountBackup, error) {
 	var out struct {
 		Backups []AccountBackup `json:"backups"`
 	}
 	if err := c.Get(accountBackupsPath(accountID), &out); err != nil {
 		return nil, err
 	}
-	for i := range out.Backups {
-		if out.Backups[i].ID == id {
-			return &out.Backups[i], nil
+	return out.Backups, nil
+}
+
+// GetAccountBackup finds one backup in the account's list - apicp has no
+// single-backup GET. Returns ErrNotFound if the account or backup is gone.
+func (c *Client) GetAccountBackup(accountID, id string) (*AccountBackup, error) {
+	all, err := c.ListAccountBackups(accountID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			return &all[i], nil
 		}
 	}
 	return nil, ErrNotFound
 }
 
+// GetAccountBackupRun reads one run (GET
+// /v1/accounts/{id}/backups/runs/{run}). apicpd keeps an account's latest 10
+// finished runs; ErrNotFound for an older or unknown one.
+func (c *Client) GetAccountBackupRun(accountID, runID string) (*AccountBackupRun, error) {
+	var run AccountBackupRun
+	if err := c.Get(accountBackupsPath(accountID)+"/runs/"+url.PathEscape(runID), &run); err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
 func (c *Client) DeleteAccountBackup(accountID, id string) error {
-	return c.Delete(fmt.Sprintf("/v1/accounts/%s/backups/%s", accountID, id))
+	return c.Delete(accountBackupsPath(accountID) + "/" + url.PathEscape(id))
 }
