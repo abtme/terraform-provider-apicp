@@ -4,17 +4,17 @@ page_title: "apicp_account_backup Resource - terraform-provider-apicp"
 subcategory: ""
 description: |-
   Takes one backup of an apicp_account - everything it owns (websites, mailboxes, databases, DNS zones, settings) - stored on apicp. With per-domain backups (apicp v0.7.0 on, backup_unit = "domain", the default) one backup is several archives: the account's settings archive plus one web and one mail archive per domain, listed in backups. With backup_unit = "account", or an older apicpd, it is one archive, and backups lists just that one.
-  It is a point-in-time snapshot: applying creates one backup, and a later apply does not take another. apicp makes the backup in a process of its own; creating waits for it, checking every few seconds, for up to 30 minutes. If that runs out the backup carries on on the server and is not in Terraform state - import it once it is made (see Import). If a backup of the same account is already running (started from the CLI, the panel or another resource), creating waits for it to end and then takes a backup of its own, so each resource owns its backup. A backup that could not capture something in full, or whose old one-off backups could not be removed afterwards, is kept, with a warning. If the run fails part way, the archives it did make stay on the server and the error lists them. apicp's one-off backup retention (apicp_system_backup_config.retention, per part) can remove the archives of older backups: an archive gone from the server drops out of backups, and the resource is gone once none is left.
-  To take a fresh one, replace the resource (terraform apply -replace=..., or replace_triggered_by). Destroying deletes every archive of the backup. Restoring is an action, not a state, so it is not exposed here - use apicp's API or CLI (POST /v1/accounts/{id}/backups/restore-account with backups set to these IDs, or apicp backup restore-account <account> --backups ...; one archive: POST /v1/accounts/{id}/backups/{backup_id}/restore).
+  It is a point-in-time snapshot: applying creates one backup, and a later apply does not take another. apicp makes the backup in a process of its own; creating waits for it, checking every few seconds, for up to 30 minutes. If that runs out the backup carries on on the server and is not in Terraform state - import it once it is made (see Import). If a backup of the same account is already running (started from the CLI, the panel or another resource), creating waits for it to end and then takes a backup of its own, so each resource owns its backup. A backup that could not capture something in full, or whose old one-off backups could not be removed afterwards, is kept, with a warning. If the run fails part way (a part could not be stored), apicp v0.7.0 deletes the archives it had made and creating is an error; any it could not delete are left marked incomplete (apicp does not restore them). If every archive was made but apicp's restore check of one fails, the archives stay on the server (verified = false, with verify_error) and creating is an error too. In both cases archives left on the server are kept in state and the resource is marked tainted, so the next apply deletes them and takes a new backup (and destroying deletes them); terraform untaint keeps them instead. apicp's one-off backup retention (apicp_system_backup_config.retention, per part) can remove the archives of older backups: an archive gone from the server drops out of backups, and the resource is gone once none is left.
+  To take a fresh one, replace the resource (terraform apply -replace=..., or replace_triggered_by). Destroying deletes every archive of the backup. Restoring is an action, not a state, so it is not exposed here - use apicp's API or CLI (POST /v1/accounts/{id}/backups/restore-account with backups set to these IDs, or on apicp v0.7.0 batch_id set to run_id; or apicp backup restore-account <account> --backups ...; one archive: POST /v1/accounts/{id}/backups/{backup_id}/restore).
 ---
 
 # apicp_account_backup (Resource)
 
 Takes one backup of an `apicp_account` - everything it owns (websites, mailboxes, databases, DNS zones, settings) - stored on apicp. With per-domain backups (apicp v0.7.0 on, `backup_unit = "domain"`, the default) one backup is several archives: the account's settings archive plus one web and one mail archive per domain, listed in `backups`. With `backup_unit = "account"`, or an older apicpd, it is one archive, and `backups` lists just that one.
 
-It is a point-in-time snapshot: applying creates one backup, and a later apply does not take another. apicp makes the backup in a process of its own; creating waits for it, checking every few seconds, for up to 30 minutes. If that runs out the backup carries on on the server and is not in Terraform state - import it once it is made (see Import). If a backup of the same account is already running (started from the CLI, the panel or another resource), creating waits for it to end and then takes a backup of its own, so each resource owns its backup. A backup that could not capture something in full, or whose old one-off backups could not be removed afterwards, is kept, with a warning. If the run fails part way, the archives it did make stay on the server and the error lists them. apicp's one-off backup retention (`apicp_system_backup_config.retention`, per part) can remove the archives of older backups: an archive gone from the server drops out of `backups`, and the resource is gone once none is left.
+It is a point-in-time snapshot: applying creates one backup, and a later apply does not take another. apicp makes the backup in a process of its own; creating waits for it, checking every few seconds, for up to 30 minutes. If that runs out the backup carries on on the server and is not in Terraform state - import it once it is made (see Import). If a backup of the same account is already running (started from the CLI, the panel or another resource), creating waits for it to end and then takes a backup of its own, so each resource owns its backup. A backup that could not capture something in full, or whose old one-off backups could not be removed afterwards, is kept, with a warning. If the run fails part way (a part could not be stored), apicp v0.7.0 deletes the archives it had made and creating is an error; any it could not delete are left marked incomplete (apicp does not restore them). If every archive was made but apicp's restore check of one fails, the archives stay on the server (`verified = false`, with `verify_error`) and creating is an error too. In both cases archives left on the server are kept in state and the resource is marked tainted, so the next apply deletes them and takes a new backup (and destroying deletes them); `terraform untaint` keeps them instead. apicp's one-off backup retention (`apicp_system_backup_config.retention`, per part) can remove the archives of older backups: an archive gone from the server drops out of `backups`, and the resource is gone once none is left.
 
-To take a fresh one, replace the resource (`terraform apply -replace=...`, or `replace_triggered_by`). Destroying deletes every archive of the backup. Restoring is an action, not a state, so it is not exposed here - use apicp's API or CLI (`POST /v1/accounts/{id}/backups/restore-account` with `backups` set to these IDs, or `apicp backup restore-account <account> --backups ...`; one archive: `POST /v1/accounts/{id}/backups/{backup_id}/restore`).
+To take a fresh one, replace the resource (`terraform apply -replace=...`, or `replace_triggered_by`). Destroying deletes every archive of the backup. Restoring is an action, not a state, so it is not exposed here - use apicp's API or CLI (`POST /v1/accounts/{id}/backups/restore-account` with `backups` set to these IDs, or on apicp v0.7.0 `batch_id` set to `run_id`; or `apicp backup restore-account <account> --backups ...`; one archive: `POST /v1/accounts/{id}/backups/{backup_id}/restore`).
 
 ## Example Usage
 
@@ -30,6 +30,11 @@ output "backup_archives" {
     for b in apicp_account_backup.nightly.backups : b.id => "${b.scope} ${b.domain} (${b.size_bytes} bytes)"
   }
 }
+
+# Archives that failed apicp's restore check (verified is null when not checked).
+output "backup_unverified" {
+  value = [for b in apicp_account_backup.nightly.backups : "${b.id}: ${b.verify_error}" if b.verified == false]
+}
 ```
 
 <!-- schema generated by tfplugindocs -->
@@ -44,7 +49,7 @@ output "backup_archives" {
 - `backups` (Attributes List) Every archive of this backup, the settings archive first. (see [below for nested schema](#nestedatt--backups))
 - `created_at` (String) When the backup was taken (RFC3339; the first archive's time).
 - `id` (String) ID of the backup's first archive: the account's settings archive with per-domain backups, the only archive otherwise.
-- `run_id` (String) The apicp backup run that made it (`arun_...`); empty from an apicpd that made the backup within the request, and after an import by archive IDs.
+- `run_id` (String) The apicp backup run that made it (`arun_...`), which is also the `batch_id` apicp v0.7.0 records on each of its archives: when the server reports it, the backup is every archive of the account with that batch ID. Empty from an apicpd that made the backup within the request, and after an import by archive IDs.
 - `size_bytes` (Number) Size of the stored backup: all its archives together (the one archive's size on an apicpd that makes one per account).
 
 <a id="nestedatt--backups"></a>
@@ -57,7 +62,8 @@ Read-Only:
 - `name` (String) The archive's file in the backup location, e.g. `manual/root._.alice.alice.example.web.<time>.<id>.tar.gz`; empty from an apicpd that does not say.
 - `scope` (String) What the archive holds: `account` (the account's settings), `domain-web` (one website), `domain-mail` (one mail domain), or empty for a whole-account archive.
 - `size_bytes` (Number) Size of the stored archive.
-- `verified` (Boolean) Result of apicp's restore check for this archive, when apicp reports one; null when it does not (apicp v0.7.0 checks the archives of scheduled runs only and does not report it per one-off backup).
+- `verified` (Boolean) Result of apicp's restore check for this archive (read back, decrypted, every member read): `true` passed, `false` failed (see `verify_error`; apicp restores it only when asked to with `allow_unverified`). Null when it was not checked: the server's `verify` setting is off, the archive is from before apicp v0.7.0, or the apicpd does not report it. Refreshed from the server's backup list on every read.
+- `verify_error` (String) Why the restore check failed; empty when it passed, was not run or the apicpd does not report it.
 
 ## Import
 
@@ -72,6 +78,7 @@ terraform import apicp_account_backup.nightly acct_abc123/bkp_xyz789
 # The archives of one per-domain backup, the settings archive first:
 terraform import apicp_account_backup.nightly acct_abc123/bkp_settings,bkp_web,bkp_mail
 
-# Every archive a backup run made (apicp keeps an account's latest 10 runs):
+# Every archive a backup run made (found by batch ID on apicp v0.7.0, however
+# old the run; older apicpd keeps only an account's latest 10 runs):
 terraform import apicp_account_backup.nightly acct_abc123/arun_0123abcd
 ```

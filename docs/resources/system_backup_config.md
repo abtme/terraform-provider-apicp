@@ -6,6 +6,7 @@ description: |-
   Configures apicp's system-level backup scheduler - a singleton resource, one per apicp install. Requires an admin-tier provider token. Sets whether it runs, when (a time of day, optional days and timezone), where backups go, how many to keep, how they are written (format, compression, encryption), whether they are split per domain and whether each run is checked by reading it back. The backup server's login and the encryption keys are secrets: set them up in the control panel or the API (/v1/system/backup-sftp, /v1/system/backup-encryption), not in Terraform state.
   Only the arguments you set are managed. On apicp v0.7.0 or later the provider changes settings with PATCH /v1/system/backup-config and sends only enabled, destination and the optional arguments set in the configuration; anything left out keeps the value saved on the server (set in the panel or with apicp backup configure). Removing an optional argument from the configuration puts that setting back to the server's default. The provider never writes back values it read: apicp shows effective values, and saving one as an explicit choice (for example encrypt = false read while the server had no key yet) would keep it after the default changes. encryption_warning says when backups are written unencrypted although the server has a key.
   Older apicpd has no PATCH: the provider then replaces the whole config with PUT as before - every optional argument left out goes back to the server's default, retention (when left out) keeps the server's value, and backup_unit / verify are refused.
+  apicp v0.7.0 and later refuse a setting they do not know (a provider newer than the server) instead of ignoring it: applying is then an error naming the argument, and nothing is changed.
 ---
 
 # apicp_system_backup_config (Resource)
@@ -15,6 +16,8 @@ Configures apicp's system-level backup scheduler - a singleton resource, one per
 **Only the arguments you set are managed.** On apicp v0.7.0 or later the provider changes settings with `PATCH /v1/system/backup-config` and sends only `enabled`, `destination` and the optional arguments set in the configuration; anything left out keeps the value saved on the server (set in the panel or with `apicp backup configure`). Removing an optional argument from the configuration puts that setting back to the server's default. The provider never writes back values it read: apicp shows effective values, and saving one as an explicit choice (for example `encrypt = false` read while the server had no key yet) would keep it after the default changes. `encryption_warning` says when backups are written unencrypted although the server has a key.
 
 Older apicpd has no PATCH: the provider then replaces the whole config with `PUT` as before - every optional argument left out goes back to the server's default, `retention` (when left out) keeps the server's value, and `backup_unit` / `verify` are refused.
+
+apicp v0.7.0 and later refuse a setting they do not know (a provider newer than the server) instead of ignoring it: applying is then an error naming the argument, and nothing is changed.
 
 ## Example Usage
 
@@ -60,7 +63,7 @@ output "system_backup_warnings" {
 - `schedule_days` (Set of String) Days to run on (`mon` to `sun`); none means every day. Omit to keep the server's setting; removing it from the configuration clears it. Needs `schedule_time`.
 - `schedule_time` (String) Time of day to run, 24-hour `HH:MM` (for example `03:30`). Omit to keep the server's setting; with none the scheduler runs every 24 hours. Removing it from the configuration clears it.
 - `timezone` (String) IANA timezone the schedule is read in, for example `Europe/London`; none means UTC. Omit to keep the server's setting; removing it from the configuration clears it. Needs `schedule_time`.
-- `verify` (Boolean) The restore check after each scheduled run (the server's default is on): every archive is read back, decrypted, its manifest parsed and every member read to the end; a failed check fails the run, so older runs are not pruned. Over SFTP it transfers everything twice. Omit to keep the server's setting. Needs apicp v0.7.0 or later.
+- `verify` (Boolean) The restore check after each backup run, scheduled or one-off (`apicp_account_backup` shows it per archive); the server's default is on. Every archive is read back, decrypted, its manifest parsed and every member read to the end; a failed check fails the run, so older backups are not pruned. Over SFTP it transfers everything twice. Omit to keep the server's setting. Needs apicp v0.7.0 or later.
 
 ### Read-Only
 
