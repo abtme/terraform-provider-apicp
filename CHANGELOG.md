@@ -1,6 +1,36 @@
 # Changelog
 
-## v0.2.0 (unreleased) - with apicp v0.7.0 (per-domain backups)
+## v0.2.0 (unreleased) - with apicp v0.8.0 (per-domain backups, a relay per mail domain)
+
+The backup changes below need apicp v0.7.0 or later; the relay changes need v0.8.0.
+
+### apicp_mail_relay (new)
+
+- One outbound relay (smart host) of a node: `node_id`, `name`, `host`, `port`, optional `username`/`password`
+  (together or neither; the password is write-only, as on `apicp_smtp_relay`), `default` (default `false`).
+  apicp v0.8.0 lets a node have several relays: the default one carries all outgoing mail, and a mail domain whose
+  `relay_id` names another relay sends through that one (mail whose envelope sender is in the domain; bounces and
+  every other sender use the default).
+- Every update sends all arguments, the password included: apicp only sends a stored password to the host and port
+  it was given for, so a new host or port needs it again.
+- Deleting a relay that mail domains use fails with apicp's answer naming them (409).
+- Import: `node_id/relay_id`.
+- On an apicpd before v0.8.0 creating one is an error saying so.
+
+### apicp_mail_domain
+
+- New optional `relay_id`: the relay the domain's outgoing mail goes through (`""` = the server's default relay).
+  Left out, the relay is left as it is on the server and the state shows the server's value (like
+  `apicp_database.vhost_id`). Only sent when set (create) or changed (update), so configurations without it keep
+  working on older apicpd. Setting it needs an admin account's token.
+- On an apicpd before v0.8.0 (which ignores the field) a `relay_id` is an error naming the version; a domain created
+  that way is kept in state, so Terraform replaces it on the next apply.
+
+### apicp_smtp_relay
+
+- Documented as the node's default relay. It keeps working unchanged against apicp v0.8.0 (the single-relay routes
+  are the default relay there). Do not also manage the same node's default with an `apicp_mail_relay` that has
+  `default = true`. Removing it is refused while mail domains name the default relay by its ID.
 
 ### apicp_account_backup
 
