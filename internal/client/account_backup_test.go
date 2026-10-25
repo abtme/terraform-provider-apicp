@@ -283,8 +283,8 @@ func TestCreateAccountBackupPerDomainArchives(t *testing.T) {
 	}
 }
 
-// A run that fails part way: the error names the archives it did make (they
-// stay on the server).
+// A run that fails part way on an apicpd from before v0.7.0 (which keeps
+// what it made): the error names the archives it did make.
 func TestCreateAccountBackupFailedRunNamesItsArchives(t *testing.T) {
 	fastPoll(t)
 	f := &fakeBackups{
@@ -296,5 +296,105 @@ func TestCreateAccountBackupFailedRunNamesItsArchives(t *testing.T) {
 	_, err := f.serve(t).CreateAccountBackup(context.Background(), "acct_1")
 	if err == nil || !strings.Contains(err.Error(), "disk full") || !strings.Contains(err.Error(), "bkp_s (manual/a.tar.gz), bkp_w") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func failedRun(t *testing.T, body string) *AccountBackupFailedError {
+	t.Helper()
+	fastPoll(t)
+	f := &fakeBackups{
+		posts: []reply{{202, running("arun_a1", "starting")}},
+		gets:  map[string][]reply{"arun_a1": {{200, body}}},
+	}
+	res, err := f.serve(t).CreateAccountBackup(context.Background(), "acct_1")
+	var failed *AccountBackupFailedError
+	if res != nil || !errors.As(err, &failed) {
+		t.Fatalf("result %+v, err %v: want an *AccountBackupFailedError", res, err)
+	}
+	return failed
+}
+
+// apicp v0.7.0: a run that fails part way deletes what it made; nothing is left.
+func TestCreateAccountBackupFailedRunRemovedItsArchives(t *testing.T) {
+	failed := failedRun(t, `{"run_id":"arun_a1","account_id":"acct_1","status":"failed",
+		"error":"1 of 3 archives failed: mail domain alice.example: disk full; the 2 archives it had made were removed",
+		"removed":["bkp_s","bkp_w"]}`)
+	if len(failed.Run.Archives()) != 0 || failed.RestoreCheckFailed() || len(failed.Run.Removed) != 2 {
+		t.Errorf("run = %+v", failed.Run)
+	}
+	if msg := failed.Error(); !strings.Contains(msg, "disk full") || !strings.Contains(msg, "were removed") || strings.Contains(msg, "stay on the server") {
+		t.Errorf("err = %s", msg)
+	}
+}
+
+// A part apicp could not delete stays, marked incomplete, and is named.
+func TestCreateAccountBackupFailedRunLeftAnIncompletePart(t *testing.T) {
+	failed := failedRun(t, `{"run_id":"arun_a1","account_id":"acct_1","status":"failed",
+		"error":"1 of 3 archives failed: mail domain alice.example: disk full; the 1 archives it had made were removed, except bkp_w: permission denied",
+		"removed":["bkp_s"],"backup":{"id":"bkp_w","batch_id":"arun_a1","incomplete":true},
+		"backups":[{"id":"bkp_w","batch_id":"arun_a1","incomplete":true,"file":"manual/w.tar.gz"}]}`)
+	left := failed.Run.Archives()
+	if len(left) != 1 || !left[0].Incomplete || left[0].BatchID != "arun_a1" {
+		t.Fatalf("left = %+v", left)
+	}
+	if msg := failed.Error(); !strings.Contains(msg, "marked incomplete") || !strings.Contains(msg, "bkp_w (manual/w.tar.gz)") {
+		t.Errorf("err = %s", msg)
+	}
+}
+
+// Every archive made, one fails the restore check: all stay, the failing one named with why.
+func TestCreateAccountBackupRestoreCheckFailed(t *testing.T) {
+	failed := failedRun(t, `{"run_id":"arun_a1","account_id":"acct_1","status":"failed",
+		"error":"restore check: 1 of 2 archives could not be read back: w.tar.gz: unexpected EOF",
+		"backups":[{"id":"bkp_s","scope":"account","batch_id":"arun_a1","verified":true},
+			{"id":"bkp_w","scope":"domain-web","batch_id":"arun_a1","verified":false,"verify_error":"unexpected EOF","file":"manual/w.tar.gz"}]}`)
+	if !failed.RestoreCheckFailed() || len(failed.Run.Archives()) != 2 {
+		t.Fatalf("run = %+v", failed.Run)
+	}
+	msg := failed.Error()
+	if !strings.Contains(msg, "2 archive(s) stay on the server") || !strings.Contains(msg, "bkp_w (manual/w.tar.gz): unexpected EOF") || strings.Contains(msg, "bkp_s") {
+		t.Errorf("err = %s", msg)
+	}
+	w := failed.Run.Archives()[1]
+	if w.Verified == nil || *w.Verified || w.VerifyError != "unexpected EOF" {
+		t.Errorf("archive = %+v", w)
+	}
+}
+
+func TestBatchArchivesSettingsFirst(t *testing.T) {
+	all := []AccountBackup{
+		{ID: "bkp_w", Scope: "domain-web", BatchID: "arun_1"},
+		{ID: "bkp_old", Scope: "account"},
+		{ID: "bkp_s", Scope: "account", BatchID: "arun_1"},
+		{ID: "bkp_x", Scope: "domain-mail", BatchID: "arun_2"},
+		{ID: "bkp_m", Scope: "domain-mail", BatchID: "arun_1"},
+	}
+	var ids []string
+	for _, b := range BatchArchives(all, "arun_1") {
+		ids = append(ids, b.ID)
+	}
+	if strings.Join(ids, ",") != "bkp_s,bkp_w,bkp_m" {
+		t.Errorf("batch = %v", ids)
+	}
+	if len(BatchArchives(all, "")) != 0 {
+		t.Error("an empty batch ID matches nothing")
+	}
+}
+
+func TestUnknownField(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{&APIError{StatusCode: 422, Message: `unknown field "backup_unit": apicpd 0.7.0 does not know it (is the client newer than this server?); nothing was changed`}, "backup_unit"},
+		{&APIError{StatusCode: 422, Message: "retention must be 0 (keep every backup) or a number from 1 to 99"}, ""},
+		{&APIError{StatusCode: 400, Message: `unknown field "x"`}, ""},
+		{ErrNotFound, ""},
+		{nil, ""},
+	} {
+		got, ok := UnknownField(tc.err)
+		if got != tc.want || ok != (tc.want != "") {
+			t.Errorf("UnknownField(%v) = %q, %v; want %q", tc.err, got, ok, tc.want)
+		}
 	}
 }

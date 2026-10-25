@@ -9,3 +9,8 @@ output "backup_archives" {
     for b in apicp_account_backup.nightly.backups : b.id => "${b.scope} ${b.domain} (${b.size_bytes} bytes)"
   }
 }
+
+# Archives that failed apicp's restore check (verified is null when not checked).
+output "backup_unverified" {
+  value = [for b in apicp_account_backup.nightly.backups : "${b.id}: ${b.verify_error}" if b.verified == false]
+}

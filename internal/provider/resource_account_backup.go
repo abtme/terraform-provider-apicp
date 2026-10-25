@@ -49,17 +49,18 @@ type AccountBackupResourceModel struct {
 
 // accountBackupArchive is one element of backups.
 type accountBackupArchive struct {
-	ID        types.String `tfsdk:"id"`
-	Scope     types.String `tfsdk:"scope"`
-	Domain    types.String `tfsdk:"domain"`
-	Name      types.String `tfsdk:"name"`
-	SizeBytes types.Int64  `tfsdk:"size_bytes"`
-	Verified  types.Bool   `tfsdk:"verified"`
+	ID          types.String `tfsdk:"id"`
+	Scope       types.String `tfsdk:"scope"`
+	Domain      types.String `tfsdk:"domain"`
+	Name        types.String `tfsdk:"name"`
+	SizeBytes   types.Int64  `tfsdk:"size_bytes"`
+	Verified    types.Bool   `tfsdk:"verified"`
+	VerifyError types.String `tfsdk:"verify_error"`
 }
 
 var accountBackupArchiveType = types.ObjectType{AttrTypes: map[string]attr.Type{
 	"id": types.StringType, "scope": types.StringType, "domain": types.StringType, "name": types.StringType,
-	"size_bytes": types.Int64Type, "verified": types.BoolType,
+	"size_bytes": types.Int64Type, "verified": types.BoolType, "verify_error": types.StringType,
 }}
 
 func (r *AccountBackupResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -73,9 +74,10 @@ func (r *AccountBackupResource) Schema(_ context.Context, _ resource.SchemaReque
 			"With `backup_unit = \"account\"`, or an older apicpd, it is one archive, and `backups` lists just that one.\n\n" +
 			"It is a point-in-time snapshot: applying creates one backup, and a later apply does not take another. apicp makes the backup in a process of its own; creating waits for it, checking every few seconds, for up to 30 minutes. If that runs out the backup carries on on the server and is not in Terraform state - import it once it is made (see Import). " +
 			"If a backup of the same account is already running (started from the CLI, the panel or another resource), creating waits for it to end and then takes a backup of its own, so each resource owns its backup. A backup that could not capture something in full, or whose old one-off backups could not be removed afterwards, is kept, with a warning. " +
-			"If the run fails part way, the archives it did make stay on the server and the error lists them. " +
+			"If the run fails part way (a part could not be stored), apicp v0.7.0 deletes the archives it had made and creating is an error; any it could not delete are left marked incomplete (apicp does not restore them). " +
+			"If every archive was made but apicp's restore check of one fails, the archives stay on the server (`verified = false`, with `verify_error`) and creating is an error too. In both cases archives left on the server are kept in state and the resource is marked tainted, so the next apply deletes them and takes a new backup (and destroying deletes them); `terraform untaint` keeps them instead. " +
 			"apicp's one-off backup retention (`apicp_system_backup_config.retention`, per part) can remove the archives of older backups: an archive gone from the server drops out of `backups`, and the resource is gone once none is left.\n\n" +
-			"To take a fresh one, replace the resource (`terraform apply -replace=...`, or `replace_triggered_by`). Destroying deletes every archive of the backup. Restoring is an action, not a state, so it is not exposed here - use apicp's API or CLI (`POST /v1/accounts/{id}/backups/restore-account` with `backups` set to these IDs, or `apicp backup restore-account <account> --backups ...`; one archive: `POST /v1/accounts/{id}/backups/{backup_id}/restore`).",
+			"To take a fresh one, replace the resource (`terraform apply -replace=...`, or `replace_triggered_by`). Destroying deletes every archive of the backup. Restoring is an action, not a state, so it is not exposed here - use apicp's API or CLI (`POST /v1/accounts/{id}/backups/restore-account` with `backups` set to these IDs, or on apicp v0.7.0 `batch_id` set to `run_id`; or `apicp backup restore-account <account> --backups ...`; one archive: `POST /v1/accounts/{id}/backups/{backup_id}/restore`).",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -99,7 +101,7 @@ func (r *AccountBackupResource) Schema(_ context.Context, _ resource.SchemaReque
 			},
 			"run_id": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "The apicp backup run that made it (`arun_...`); empty from an apicpd that made the backup within the request, and after an import by archive IDs.",
+				MarkdownDescription: "The apicp backup run that made it (`arun_...`), which is also the `batch_id` apicp v0.7.0 records on each of its archives: when the server reports it, the backup is every archive of the account with that batch ID. Empty from an apicpd that made the backup within the request, and after an import by archive IDs.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"backups": schema.ListNestedAttribute{
@@ -117,7 +119,11 @@ func (r *AccountBackupResource) Schema(_ context.Context, _ resource.SchemaReque
 					"size_bytes": schema.Int64Attribute{Computed: true, MarkdownDescription: "Size of the stored archive."},
 					"verified": schema.BoolAttribute{
 						Computed:            true,
-						MarkdownDescription: "Result of apicp's restore check for this archive, when apicp reports one; null when it does not (apicp v0.7.0 checks the archives of scheduled runs only and does not report it per one-off backup).",
+						MarkdownDescription: "Result of apicp's restore check for this archive (read back, decrypted, every member read): `true` passed, `false` failed (see `verify_error`; apicp restores it only when asked to with `allow_unverified`). Null when it was not checked: the server's `verify` setting is off, the archive is from before apicp v0.7.0, or the apicpd does not report it. Refreshed from the server's backup list on every read.",
+					},
+					"verify_error": schema.StringAttribute{
+						Computed:            true,
+						MarkdownDescription: "Why the restore check failed; empty when it passed, was not run or the apicpd does not report it.",
 					},
 				}},
 			},
@@ -151,6 +157,7 @@ func applyAccountBackups(ctx context.Context, accountID string, archives []clien
 		elems[i] = accountBackupArchive{
 			ID: types.StringValue(b.ID), Scope: types.StringValue(b.Scope), Domain: types.StringValue(b.Domain),
 			Name: types.StringValue(b.Name()), SizeBytes: types.Int64Value(b.SizeBytes), Verified: types.BoolPointerValue(b.Verified),
+			VerifyError: types.StringValue(b.VerifyError),
 		}
 	}
 	m.SizeBytes = types.Int64Value(total)
@@ -189,6 +196,11 @@ func (r *AccountBackupResource) Create(ctx context.Context, req resource.CreateR
 	waitCtx, cancel := context.WithTimeout(ctx, accountBackupCreateTimeout)
 	defer cancel()
 	res, err := r.client.CreateAccountBackup(waitCtx, plan.AccountID.ValueString())
+	var failed *client.AccountBackupFailedError
+	if errors.As(err, &failed) {
+		r.createFailed(ctx, &plan, failed, resp)
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating account backup", err.Error())
 		return
@@ -207,8 +219,85 @@ func (r *AccountBackupResource) Create(ctx context.Context, req resource.CreateR
 		archives = []client.AccountBackup{*res.Backup}
 	}
 	resp.Diagnostics.Append(applyAccountBackups(ctx, plan.AccountID.ValueString(), archives, &plan)...)
-	plan.RunID = types.StringValue(res.RunID)
+	plan.RunID = types.StringValue(runIDOf(res.RunID, archives))
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// runIDOf is the backup's run ID: the batch ID its archives carry (apicp
+// v0.7.0 on, the same as the run's ID), else the run's.
+func runIDOf(runID string, archives []client.AccountBackup) string {
+	if len(archives) > 0 && archives[0].BatchID != "" {
+		return archives[0].BatchID
+	}
+	return runID
+}
+
+// createFailed reports a backup run that failed. With nothing left on the
+// server (apicp v0.7.0 deletes the parts of a run that failed part way) it
+// is a plain error and nothing goes into state. Archives it left - all of
+// them when only the restore check failed, else parts apicp could not
+// delete (marked incomplete) - are put into state with the error, which
+// makes Terraform mark the resource tainted: they stay tracked, the next
+// apply deletes them and takes a new backup, and destroy deletes them.
+func (r *AccountBackupResource) createFailed(ctx context.Context, plan *AccountBackupResourceModel, failed *client.AccountBackupFailedError, resp *resource.CreateResponse) {
+	left := failed.Run.Archives()
+	if len(left) == 0 {
+		resp.Diagnostics.AddError("Error creating account backup", failed.Error()+". Nothing of it is left on the server or in Terraform state.")
+		return
+	}
+	resp.Diagnostics.Append(applyAccountBackups(ctx, plan.AccountID.ValueString(), left, plan)...)
+	plan.RunID = types.StringValue(runIDOf(failed.Run.RunID, left))
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+
+	summary := "Account backup failed"
+	if failed.RestoreCheckFailed() {
+		summary = "Account backup failed its restore check"
+	}
+	resp.Diagnostics.AddError(summary, failed.Error()+
+		".\n\nThe archives left on the server are kept in Terraform state and the resource is marked tainted: the next apply deletes them and takes a new backup, and destroying deletes them. "+
+		"To keep them instead, run terraform untaint on this resource.")
+}
+
+// selectArchives picks this backup's archives from the account's backup
+// list: every archive whose batch_id is runID (apicp v0.7.0 on), else the
+// archives the state names that are still there (older apicpd, archives
+// made before batch IDs, or an import by archive IDs). The settings archive
+// comes first, then the state's order, then any other archive of the batch.
+func selectArchives(all []client.AccountBackup, runID string, ids []string) []client.AccountBackup {
+	byID := make(map[string]client.AccountBackup, len(all))
+	for _, b := range all {
+		byID[b.ID] = b
+	}
+	batch := client.BatchArchives(all, runID)
+	if len(batch) == 0 {
+		var still []client.AccountBackup
+		for _, id := range ids {
+			if b, ok := byID[id]; ok {
+				still = append(still, b)
+			}
+		}
+		return still
+	}
+	inBatch := make(map[string]bool, len(batch))
+	for _, b := range batch {
+		inBatch[b.ID] = true
+	}
+	var out []client.AccountBackup
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if inBatch[id] && !seen[id] {
+			out = append(out, byID[id])
+			seen[id] = true
+		}
+	}
+	for _, b := range batch {
+		if !seen[b.ID] {
+			out = append(out, b)
+			seen[b.ID] = true
+		}
+	}
+	client.SettingsFirst(out)
+	return out
 }
 
 func (r *AccountBackupResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -232,16 +321,7 @@ func (r *AccountBackupResource) Read(ctx context.Context, req resource.ReadReque
 		resp.Diagnostics.AddError("Error reading account backup", err.Error())
 		return
 	}
-	byID := make(map[string]client.AccountBackup, len(all))
-	for _, b := range all {
-		byID[b.ID] = b
-	}
-	var still []client.AccountBackup
-	for _, id := range ids {
-		if b, ok := byID[id]; ok {
-			still = append(still, b)
-		}
-	}
+	still := selectArchives(all, state.RunID.ValueString(), ids)
 	if len(still) == 0 {
 		resp.State.RemoveResource(ctx)
 		return
@@ -288,7 +368,8 @@ func (r *AccountBackupResource) Delete(ctx context.Context, req resource.DeleteR
 // ImportState accepts "account_id/backup_id" (one archive),
 // "account_id/backup_id,backup_id,..." (the archives of one backup, the
 // settings archive first) or "account_id/arun_..." (every archive a backup
-// run made; apicp keeps an account's latest 10 runs).
+// run made: found by batch_id in the account's backup list on apicp v0.7.0,
+// else from the run, which apicp keeps for an account's latest 10 runs).
 func (r *AccountBackupResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	parts := strings.SplitN(req.ID, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -304,16 +385,11 @@ func (r *AccountBackupResource) ImportState(ctx context.Context, req resource.Im
 			resp.Diagnostics.AddError("Provider not configured", "importing by run ID needs the provider's apicp connection")
 			return
 		}
-		run, err := r.client.GetAccountBackupRun(accountID, parts[1])
-		if err != nil {
-			resp.Diagnostics.AddError("Error reading backup run", fmt.Sprintf("run %s of account %s: %v (apicp keeps an account's latest 10 runs; import by archive IDs instead)", parts[1], accountID, err))
+		runID = parts[1]
+		archives = r.importRun(accountID, runID, &resp.Diagnostics)
+		if resp.Diagnostics.HasError() {
 			return
 		}
-		if run.Status != client.AccountBackupRunFinished || len(run.Archives()) == 0 {
-			resp.Diagnostics.AddError("Backup run not finished", fmt.Sprintf("run %s is %s and has no backup to import yet", run.RunID, run.Status))
-			return
-		}
-		archives, runID = run.Archives(), run.RunID
 	} else {
 		for _, id := range strings.Split(parts[1], ",") {
 			if id = strings.TrimSpace(id); id != "" {
@@ -330,4 +406,46 @@ func (r *AccountBackupResource) ImportState(ctx context.Context, req resource.Im
 	resp.Diagnostics.Append(applyAccountBackups(ctx, accountID, archives, &m)...)
 	// the read that follows fills in the rest of each archive
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
+
+// importRun finds the archives of one back-up-now run: those with that
+// batch_id in the account's backup list (apicp v0.7.0 on - this works however
+// long ago the run was), else the run's own record (older apicpd, or
+// archives from before batch IDs; apicp keeps an account's latest 10 runs).
+func (r *AccountBackupResource) importRun(accountID, runID string, diags *diag.Diagnostics) []client.AccountBackup {
+	all, err := r.client.ListAccountBackups(accountID)
+	if err != nil {
+		diags.AddError("Error reading account backups", fmt.Sprintf("account %s: %v", accountID, err))
+		return nil
+	}
+	if batch := client.BatchArchives(all, runID); len(batch) > 0 {
+		var incomplete []string
+		for _, b := range batch {
+			if b.Incomplete {
+				incomplete = append(incomplete, b.ID)
+			}
+		}
+		if len(incomplete) == 0 {
+			return batch
+		}
+		run, err := r.client.GetAccountBackupRun(accountID, runID)
+		if err == nil && run.Status == client.AccountBackupRunRunning {
+			diags.AddError("Backup run not finished", fmt.Sprintf("run %s is still running; import it once it has finished", runID))
+			return nil
+		}
+		diags.AddWarning("Importing incomplete archives",
+			fmt.Sprintf("Run %s did not finish: archive(s) %s are marked incomplete and apicp does not restore them. They are imported so that destroying this resource deletes them.", runID, strings.Join(incomplete, ", ")))
+		return batch
+	}
+
+	run, err := r.client.GetAccountBackupRun(accountID, runID)
+	if err != nil {
+		diags.AddError("Error reading backup run", fmt.Sprintf("run %s of account %s: no archive of the account's backup list has that batch ID, and the run could not be read: %v (apicp keeps an account's latest 10 runs; import by archive IDs instead)", runID, accountID, err))
+		return nil
+	}
+	if run.Status != client.AccountBackupRunFinished || len(run.Archives()) == 0 {
+		diags.AddError("Backup run not finished", fmt.Sprintf("run %s is %s and has no backup to import yet", run.RunID, run.Status))
+		return nil
+	}
+	return run.Archives()
 }

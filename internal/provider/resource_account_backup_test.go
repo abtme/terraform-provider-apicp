@@ -30,6 +30,7 @@ func fastBackupPoll(t *testing.T) {
 type fakeAccountBackups struct {
 	mu      sync.Mutex
 	run     string           // the finished run's JSON
+	runGone bool             // the run's status file was pruned (404)
 	stored  []map[string]any // GET /v1/accounts/acct_1/backups
 	deleted []string
 }
@@ -46,6 +47,11 @@ func (f *fakeAccountBackups) client(t *testing.T) *client.Client {
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"run_id":"arun_1","account_id":"acct_1","status":"running","stage":"starting"}`))
 		case r.Method == http.MethodGet && r.URL.Path == base+"/runs/arun_1":
+			if f.runGone {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"backup run not found"}`))
+				return
+			}
 			_, _ = w.Write([]byte(f.run))
 		case r.Method == http.MethodGet && r.URL.Path == base:
 			_ = json.NewEncoder(w).Encode(map[string]any{"backups": f.stored})
@@ -282,5 +288,174 @@ func TestAccountBackupImport(t *testing.T) {
 	r.ImportState(context.Background(), resource.ImportStateRequest{ID: "bkp_s"}, &resp)
 	if !resp.Diagnostics.HasError() {
 		t.Error("an ID without the account must be refused")
+	}
+}
+
+// perDomainBatch is perDomainArchives as apicp v0.7.0 lists them: batch_id
+// arun_1 and the restore check's result.
+func perDomainBatch() []map[string]any {
+	all := perDomainArchives()
+	for _, a := range all {
+		a["batch_id"] = "arun_1"
+		a["verified"] = true
+	}
+	all[2]["verified"] = false
+	all[2]["verify_error"] = "unexpected EOF"
+	return all
+}
+
+func readBackup(t *testing.T, r *AccountBackupResource, state tfsdk.State) (resource.ReadResponse, AccountBackupResourceModel) {
+	t.Helper()
+	resp := resource.ReadResponse{State: state}
+	r.Read(context.Background(), resource.ReadRequest{State: state}, &resp)
+	var got AccountBackupResourceModel
+	if !resp.Diagnostics.HasError() && !resp.State.Raw.IsNull() {
+		resp.State.Get(context.Background(), &got)
+	}
+	return resp, got
+}
+
+// Read takes verified and verify_error from the backup list; null where the
+// server does not report them.
+func TestAccountBackupReadFillsVerified(t *testing.T) {
+	fastBackupPoll(t)
+	f := &fakeAccountBackups{run: perDomainRun(t, nil)}
+	_, created := accountBackupCreate(t, f)
+	if a := archivesOf(t, created); !a[0].Verified.IsNull() || a[0].VerifyError.ValueString() != "" {
+		t.Fatalf("the run reported no check: archive %+v", a[0])
+	}
+	r := &AccountBackupResource{client: f.client(t)}
+
+	f.stored = perDomainBatch()
+	_, got := readBackup(t, r, stateOf(t, r, created))
+	a := archivesOf(t, got)
+	if len(a) != 3 || !a[0].Verified.ValueBool() || a[2].Verified.IsNull() || a[2].Verified.ValueBool() || a[2].VerifyError.ValueString() != "unexpected EOF" {
+		t.Errorf("archives %+v", a)
+	}
+
+	f.stored = perDomainArchives() // an apicpd that does not report it
+	_, got = readBackup(t, r, stateOf(t, r, got))
+	for _, x := range archivesOf(t, got) {
+		if !x.Verified.IsNull() || x.VerifyError.ValueString() != "" {
+			t.Errorf("archive %s: verified %v, verify_error %q; want null and empty", x.ID.ValueString(), x.Verified, x.VerifyError.ValueString())
+		}
+	}
+}
+
+// With batch IDs the backup is every archive of its batch: one the state
+// does not name joins, the settings archive stays first, other batches and
+// an archive named in state but of another batch stay out.
+func TestAccountBackupReadUsesTheBatch(t *testing.T) {
+	f := &fakeAccountBackups{}
+	r := &AccountBackupResource{client: f.client(t)}
+	all := perDomainBatch()
+	f.stored = []map[string]any{
+		all[1], {"id": "bkp_other", "account_id": "acct_1", "scope": "account", "batch_id": "arun_2"}, all[2], all[0],
+	}
+	sch := resourceSchema(t, r)
+	state := tfsdk.State{Schema: sch, Raw: objectValue(t, sch, map[string]any{"id": "bkp_s", "account_id": "acct_1",
+		"created_at": "2026-10-25T10:00:00Z", "size_bytes": 10, "run_id": "arun_1"})}
+	_, got := readBackup(t, r, state)
+	var ids []string
+	for _, a := range archivesOf(t, got) {
+		ids = append(ids, a.ID.ValueString())
+	}
+	if strings.Join(ids, ",") != "bkp_s,bkp_w,bkp_m" || got.ID.ValueString() != "bkp_s" || got.SizeBytes.ValueInt64() != 240 || got.RunID.ValueString() != "arun_1" {
+		t.Errorf("archives %v, state %+v", ids, got)
+	}
+
+	// the batch pruned away: gone, even though another archive exists
+	f.stored = f.stored[1:2]
+	resp, _ := readBackup(t, r, state)
+	if resp.Diagnostics.HasError() || !resp.State.Raw.IsNull() {
+		t.Errorf("want the resource removed: %v", resp.Diagnostics)
+	}
+}
+
+// Import by run ID finds the archives by batch_id when apicp has already
+// pruned the run's status file; without batch IDs or the run it is an error.
+func TestAccountBackupImportByBatchID(t *testing.T) {
+	f := &fakeAccountBackups{runGone: true, stored: append([]map[string]any{{"id": "bkp_other", "account_id": "acct_1", "batch_id": "arun_9"}}, perDomainBatch()...)}
+	r := &AccountBackupResource{client: f.client(t)}
+	sch := resourceSchema(t, r)
+	resp := resource.ImportStateResponse{State: nullState(tfsdk.State{Schema: sch})}
+	r.ImportState(context.Background(), resource.ImportStateRequest{ID: "acct_1/arun_1"}, &resp)
+	if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 0 {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+	var got AccountBackupResourceModel
+	resp.State.Get(context.Background(), &got)
+	a := archivesOf(t, got)
+	if len(a) != 3 || a[0].ID.ValueString() != "bkp_s" || got.RunID.ValueString() != "arun_1" || a[2].Verified.ValueBool() {
+		t.Errorf("state %+v, archives %+v", got, a)
+	}
+
+	f.stored = perDomainArchives() // no batch IDs, run gone
+	resp = resource.ImportStateResponse{State: nullState(tfsdk.State{Schema: sch})}
+	r.ImportState(context.Background(), resource.ImportStateRequest{ID: "acct_1/arun_1"}, &resp)
+	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "import by archive IDs") {
+		t.Errorf("diagnostics: %v", resp.Diagnostics)
+	}
+}
+
+// Incomplete leftovers of a failed run import with a warning; a run still
+// going is refused.
+func TestAccountBackupImportIncomplete(t *testing.T) {
+	f := &fakeAccountBackups{run: `{"run_id":"arun_1","account_id":"acct_1","status":"failed","error":"disk full"}`,
+		stored: []map[string]any{{"id": "bkp_w", "account_id": "acct_1", "batch_id": "arun_1", "incomplete": true}}}
+	r := &AccountBackupResource{client: f.client(t)}
+	sch := resourceSchema(t, r)
+	resp := resource.ImportStateResponse{State: nullState(tfsdk.State{Schema: sch})}
+	r.ImportState(context.Background(), resource.ImportStateRequest{ID: "acct_1/arun_1"}, &resp)
+	if resp.Diagnostics.HasError() || resp.Diagnostics.WarningsCount() != 1 || !strings.Contains(resp.Diagnostics.Warnings()[0].Detail(), "incomplete") {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+
+	f.run = `{"run_id":"arun_1","account_id":"acct_1","status":"running","stage":"storing"}`
+	resp = resource.ImportStateResponse{State: nullState(tfsdk.State{Schema: sch})}
+	r.ImportState(context.Background(), resource.ImportStateRequest{ID: "acct_1/arun_1"}, &resp)
+	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "still running") {
+		t.Errorf("diagnostics: %v", resp.Diagnostics)
+	}
+}
+
+// apicp v0.7.0: a run that failed part way removed its archives - an error,
+// nothing in state.
+func TestAccountBackupCreateFailedRunLeavesNothing(t *testing.T) {
+	fastBackupPoll(t)
+	f := &fakeAccountBackups{run: `{"run_id":"arun_1","account_id":"acct_1","status":"failed",
+		"error":"1 of 3 archives failed: mail domain alice.example: disk full; the 2 archives it had made were removed","removed":["bkp_s","bkp_w"]}`}
+	resp, _ := accountBackupCreate(t, f)
+	if !resp.Diagnostics.HasError() || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "disk full") {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+	if !resp.State.Raw.IsNull() {
+		t.Errorf("nothing may go into state: %v", resp.State.Raw)
+	}
+}
+
+// A failed restore check keeps the archives: they go into state with the
+// error (Terraform then marks the resource tainted), verified as reported.
+func TestAccountBackupCreateRestoreCheckFailedTaints(t *testing.T) {
+	fastBackupPoll(t)
+	all := perDomainBatch()
+	b, _ := json.Marshal(map[string]any{"run_id": "arun_1", "account_id": "acct_1", "status": "failed",
+		"error": "restore check: 1 of 3 archives could not be read back: mail.tar.gz: unexpected EOF", "backup": all[0], "backups": all})
+	f := &fakeAccountBackups{run: string(b)}
+	resp, _ := accountBackupCreate(t, f)
+	if !resp.Diagnostics.HasError() || resp.Diagnostics.Errors()[0].Summary() != "Account backup failed its restore check" ||
+		!strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "bkp_m") || !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), "tainted") {
+		t.Fatalf("diagnostics: %v", resp.Diagnostics)
+	}
+	var got AccountBackupResourceModel
+	if d := resp.State.Get(context.Background(), &got); d.HasError() {
+		t.Fatal(d)
+	}
+	a := archivesOf(t, got)
+	if len(a) != 3 || got.ID.ValueString() != "bkp_s" || got.RunID.ValueString() != "arun_1" || a[2].Verified.ValueBool() || a[2].VerifyError.ValueString() != "unexpected EOF" {
+		t.Errorf("state %+v, archives %+v", got, a)
+	}
+	if !resp.State.Raw.IsFullyKnown() {
+		t.Error("the state must be fully known")
 	}
 }
