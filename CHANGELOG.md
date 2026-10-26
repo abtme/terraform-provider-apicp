@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.0 (unreleased)
+## v0.3.0 (2026-10-26)
 
 ### apicp_mail_domain: compression defaults to zstd level 3
 
