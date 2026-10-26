@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.0 (unreleased) - with apicp v0.7.0 (per-domain backups) and v0.8.0 (a relay per mail domain, stored-mail compression)
+## v0.2.0 (2026-10-26) - with apicp v0.7.0 (per-domain backups) and v0.8.0 (a relay per mail domain, stored-mail compression)
 
 The backup changes below need apicp v0.7.0 or later; the relay and compression changes need v0.8.0.
 
