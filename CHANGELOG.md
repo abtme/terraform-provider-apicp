@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.0 (unreleased)
+
+### apicp_mail_domain: compression defaults to zstd level 3
+
+- `compression` left out is now `zstd` (was `off`), and `compression_level` left out is the method's own default
+  (zstd 3, gz 6, bz2 9; 0 for lz4 and off). Upgrading from v0.2.0: a domain whose configuration leaves compression
+  out and whose server has it off now plans `off -> zstd` (new mail is stored compressed; mail already stored is not
+  changed). Set `compression = "off"` to keep such a domain uncompressed. Creating a mail domain on an apicpd before
+  v0.8.0 now needs `compression = "off"`.
+- apicp's level 0 ("the method's default") and that default count as the same level: a domain apicp or the CLI set
+  to zstd at level 0 plans no change against a configuration with level 3 or none, and the other way round.
+
 ## v0.2.0 (2026-10-26) - with apicp v0.7.0 (per-domain backups) and v0.8.0 (a relay per mail domain, stored-mail compression)
 
 The backup changes below need apicp v0.7.0 or later; the relay and compression changes need v0.8.0.

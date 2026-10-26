@@ -27,6 +27,66 @@ var _ resource.ResourceWithValidateConfig = &MailDomainResource{}
 // (0 = the method's default; off and lz4 take none).
 var compressionLevels = map[string][2]int64{"off": {0, 0}, "zstd": {1, 22}, "lz4": {0, 0}, "gz": {1, 9}, "bz2": {1, 9}}
 
+// defaultCompression is the method a mail domain gets when compression is
+// left out: zstd at its default level 3, as small as gzip and much faster.
+const defaultCompression = "zstd"
+
+// defaultCompressionLevels are the levels apicp uses for level 0 (the
+// method's own default); compression_level left out plans these.
+var defaultCompressionLevels = map[string]int64{"off": 0, "zstd": 3, "lz4": 0, "gz": 6, "bz2": 9}
+
+// sameCompressionLevel reports whether two levels of method store mail the
+// same way: equal, or one is 0 (apicp's "the method's default") and the
+// other that default. A domain apicp keeps at level 0 then matches a
+// configuration's level 3 for zstd, and the other way round.
+func sameCompressionLevel(method string, a, b int64) bool {
+	norm := func(l int64) int64 {
+		if l == 0 {
+			return defaultCompressionLevels[method]
+		}
+		return l
+	}
+	return norm(a) == norm(b)
+}
+
+// compressionLevelDefault plans the method's default level when
+// compression_level is left out, keeping the state's value when it already
+// means that (level 0 on a domain apicp created or that the CLI set).
+type compressionLevelDefault struct{}
+
+func (compressionLevelDefault) Description(context.Context) string {
+	return "the compression method's default level when not configured"
+}
+
+func (m compressionLevelDefault) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (compressionLevelDefault) PlanModifyInt64(ctx context.Context, req planmodifier.Int64Request, resp *planmodifier.Int64Response) {
+	if !req.ConfigValue.IsNull() {
+		return
+	}
+	var method types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("compression"), &method)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if method.IsUnknown() || method.IsNull() {
+		resp.PlanValue = types.Int64Unknown()
+		return
+	}
+	def := defaultCompressionLevels[method.ValueString()]
+	if !req.StateValue.IsNull() && !req.StateValue.IsUnknown() {
+		var stateMethod types.String
+		resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("compression"), &stateMethod)...)
+		if stateMethod.Equal(method) && sameCompressionLevel(method.ValueString(), req.StateValue.ValueInt64(), def) {
+			resp.PlanValue = req.StateValue
+			return
+		}
+	}
+	resp.PlanValue = types.Int64Value(def)
+}
+
 func NewMailDomainResource() resource.Resource { return &MailDomainResource{} }
 
 type MailDomainResource struct{ client *client.Client }
@@ -101,8 +161,8 @@ func (r *MailDomainResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"compression": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
-				Default:  stringdefault.StaticString("off"),
-				MarkdownDescription: "How new mail of this domain is stored: `off` (default), `zstd`, `lz4`, `gz` or `bz2` (Dovecot's mail_compress plugin; mail programs notice nothing). " +
+				Default:  stringdefault.StaticString(defaultCompression),
+				MarkdownDescription: "How new mail of this domain is stored: `zstd` (default), `lz4`, `gz`, `bz2` or `off` (Dovecot's mail_compress plugin; mail programs notice nothing). " +
 					"`zstd` (level 3) is the right choice almost always: as small as gzip, about ten times faster. `lz4` uses the least CPU and saves less; `gz` for compatibility; high zstd levels only for archive mailboxes; `bz2` has no advantage. " +
 					"Only methods the server's Dovecot can write are accepted (`apicp_mail_settings.compression_methods`). Mail already stored is not changed: compress or decompress it with `apicp mail compress-existing` / `decompress-existing` (a one-off job, deliberately not a Terraform resource); turning compression off keeps compressed mail readable. " +
 					"Cannot change while such a job of the domain runs. Needs apicp v0.8.0.",
@@ -110,8 +170,8 @@ func (r *MailDomainResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"compression_level": schema.Int64Attribute{
 				Optional:            true,
 				Computed:            true,
-				Default:             int64default.StaticInt64(0),
-				MarkdownDescription: "The method's level: `zstd` 1-22, `gz` 1-9, `bz2` 1-9 (block size); `lz4` and `off` take none. `0` (default) = the method's own default (zstd 3, gz 6, bz2 9).",
+				PlanModifiers:       []planmodifier.Int64{compressionLevelDefault{}},
+				MarkdownDescription: "The method's level: `zstd` 1-22, `gz` 1-9, `bz2` 1-9 (block size); `lz4` and `off` take none. Left out, the method's own default: zstd 3, gz 6, bz2 9 (0 for lz4 and off). `0` also means that default, and apicp's level 0 and the default count as the same setting, so neither plans a change to the other.",
 			},
 			"compressed_mail": schema.BoolAttribute{
 				Computed:            true,
@@ -192,7 +252,11 @@ func (r *MailDomainResource) applyDomain(d *client.MailDomain, m *MailDomainReso
 	m.MaxEmailsPerHour = types.Int64Value(int64(d.MaxEmailsPerHour))
 	m.RelayID = types.StringValue(d.RelayID)
 	m.Compression = types.StringValue(d.CompressionMethod())
-	m.CompressionLevel = types.Int64Value(int64(d.CompressionLevel))
+	// The prior value stays when it means the same (0 = the method's default).
+	level := int64(d.CompressionLevel)
+	if prior := m.CompressionLevel; prior.IsNull() || prior.IsUnknown() || !sameCompressionLevel(d.CompressionMethod(), level, prior.ValueInt64()) {
+		m.CompressionLevel = types.Int64Value(level)
+	}
 	m.CompressedMail = types.BoolValue(d.CompressedMail)
 	m.Status = types.StringValue(d.Status)
 }
