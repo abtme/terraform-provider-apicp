@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 (2026-10-31) - with apicp 0.8.5 (mailbox tokens)
 
 - `apicp_account_token`: `mailbox_id` pins the token to one mailbox of the account (apicp 0.8.5 or later), with scopes `mailbox:read` and/or `mailbox:write`; it is sent only when set, so older apicp sees the same request as before.
 
