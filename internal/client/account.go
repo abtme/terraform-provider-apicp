@@ -58,6 +58,8 @@ type accountTokenCreateRequest struct {
 	Label    string   `json:"label"`
 	Scopes   []string `json:"scopes"`
 	TOTPCode string   `json:"totp_code,omitempty"`
+	// MailboxID pins the token to one mailbox of the account (apicp 0.8.5+; scopes mailbox:read/mailbox:write).
+	MailboxID string `json:"mailbox_id,omitempty"`
 }
 
 type AccountToken struct {
@@ -67,9 +69,9 @@ type AccountToken struct {
 // CreateAccountToken mints a new bearer token for accountID (PLAN.md §8
 // phase 1) - returned exactly once, apicp never stores or re-returns the
 // plaintext. totpCode is only needed when the account has TOTP enabled.
-func (c *Client) CreateAccountToken(accountID, label string, scopes []string, totpCode string) (*AccountToken, error) {
+func (c *Client) CreateAccountToken(accountID, label string, scopes []string, totpCode, mailboxID string) (*AccountToken, error) {
 	var t AccountToken
-	if err := c.Post("/v1/accounts/"+accountID+"/tokens", accountTokenCreateRequest{Label: label, Scopes: scopes, TOTPCode: totpCode}, &t); err != nil {
+	if err := c.Post("/v1/accounts/"+accountID+"/tokens", accountTokenCreateRequest{Label: label, Scopes: scopes, TOTPCode: totpCode, MailboxID: mailboxID}, &t); err != nil {
 		return nil, err
 	}
 	return &t, nil

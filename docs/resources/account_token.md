@@ -36,6 +36,7 @@ output "mail_token" {
 
 ### Optional
 
+- `mailbox_id` (String) Pins the token to one mailbox of the account (apicp 0.8.5 or later): it then reaches only that mailbox's own routes (its settings, password, usage, filters, out-of-office, mail client settings), with scopes `mailbox:read` and/or `mailbox:write`, which need it. Changing this replaces the resource.
 - `totp_code` (String, Sensitive) Current one-time code, needed only when the account has TOTP enabled. Codes expire in seconds, so this is only used at creation and is never re-checked.
 
 ### Read-Only

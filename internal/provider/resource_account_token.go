@@ -27,6 +27,7 @@ type AccountTokenResourceModel struct {
 	AccountID types.String `tfsdk:"account_id"`
 	Label     types.String `tfsdk:"label"`
 	Scopes    types.Set    `tfsdk:"scopes"`
+	MailboxID types.String `tfsdk:"mailbox_id"`
 	TOTPCode  types.String `tfsdk:"totp_code"`
 	Token     types.String `tfsdk:"token"`
 }
@@ -59,6 +60,11 @@ func (r *AccountTokenResource) Schema(_ context.Context, _ resource.SchemaReques
 				ElementType:         types.StringType,
 				MarkdownDescription: "Scopes the token holds, e.g. `[\"mail:read\", \"mail:write\"]`. Changing this replaces the resource.",
 				PlanModifiers:       []planmodifier.Set{setplanmodifier.RequiresReplace()},
+			},
+			"mailbox_id": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Pins the token to one mailbox of the account (apicp 0.8.5 or later): it then reaches only that mailbox's own routes (its settings, password, usage, filters, out-of-office, mail client settings), with scopes `mailbox:read` and/or `mailbox:write`, which need it. Changing this replaces the resource.",
+				PlanModifiers:       replace,
 			},
 			"totp_code": schema.StringAttribute{
 				Optional:            true,
@@ -99,7 +105,7 @@ func (r *AccountTokenResource) Create(ctx context.Context, req resource.CreateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	tok, err := r.client.CreateAccountToken(plan.AccountID.ValueString(), plan.Label.ValueString(), scopes, plan.TOTPCode.ValueString())
+	tok, err := r.client.CreateAccountToken(plan.AccountID.ValueString(), plan.Label.ValueString(), scopes, plan.TOTPCode.ValueString(), plan.MailboxID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating account token", err.Error())
 		return

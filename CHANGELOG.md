@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `apicp_account_token`: `mailbox_id` pins the token to one mailbox of the account (apicp 0.8.5 or later), with scopes `mailbox:read` and/or `mailbox:write`; it is sent only when set, so older apicp sees the same request as before.
+
 ## v0.3.0 (2026-10-26)
 
 ### apicp_mail_domain: compression defaults to zstd level 3
