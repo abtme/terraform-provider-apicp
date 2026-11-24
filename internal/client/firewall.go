@@ -1,6 +1,9 @@
 package client
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+)
 
 // FirewallConfig mirrors apicp's internal/firewall.Config JSON shape
 // (PLAN.md §8 phase 7) - the enable/disable toggle. Enforcement off
@@ -43,6 +46,7 @@ type FirewallRule struct {
 	ID        string   `json:"id"`
 	Source    string   `json:"source,omitempty"` // CIDR; "" = anywhere
 	Sources   []string `json:"sources,omitempty"`
+	List      string   `json:"list,omitempty"` // an address list or template (accept rules only)
 	Port      string   `json:"port,omitempty"` // "22", "1000:2000"; "" = all ports
 	Protocol  string   `json:"protocol"`       // tcp, udp, all
 	Action    string   `json:"action"`         // accept, drop, reject
@@ -54,6 +58,7 @@ type FirewallRule struct {
 type firewallRuleCreateRequest struct {
 	Source   string   `json:"source,omitempty"`
 	Sources  []string `json:"sources,omitempty"`
+	List     string   `json:"list,omitempty"`
 	Port     string   `json:"port,omitempty"`
 	Protocol string   `json:"protocol"`
 	Action   string   `json:"action"`
@@ -61,10 +66,11 @@ type firewallRuleCreateRequest struct {
 }
 
 // CreateFirewallRule implements POST /v1/firewall/rules. No update
-// endpoint exists server-side - every field change is a replace.
-func (c *Client) CreateFirewallRule(source string, sources []string, port, protocol, action, comment string) (*FirewallRule, error) {
+// endpoint exists server-side - every field change is a replace. list names
+// an address list or template ("" for none; accept rules only).
+func (c *Client) CreateFirewallRule(source string, sources []string, list, port, protocol, action, comment string) (*FirewallRule, error) {
 	var r FirewallRule
-	req := firewallRuleCreateRequest{Source: source, Sources: sources, Port: port, Protocol: protocol, Action: action, Comment: comment}
+	req := firewallRuleCreateRequest{Source: source, Sources: sources, List: list, Port: port, Protocol: protocol, Action: action, Comment: comment}
 	if err := c.Post("/v1/firewall/rules", req, &r); err != nil {
 		return nil, err
 	}
@@ -88,6 +94,7 @@ func (c *Client) DeleteFirewallRule(id string) error {
 type FirewallRestriction struct {
 	Port      int      `json:"port"`
 	Sources   []string `json:"sources"`
+	Lists     []string `json:"lists,omitempty"`
 	Comment   string   `json:"comment,omitempty"`
 	Force     bool     `json:"force,omitempty"`
 	CreatedAt string   `json:"created_at"`
@@ -96,15 +103,20 @@ type FirewallRestriction struct {
 
 type firewallRestrictionRequest struct {
 	Sources []string `json:"sources"`
+	Lists   []string `json:"lists,omitempty"`
 	Comment string   `json:"comment,omitempty"`
 	Force   bool     `json:"force,omitempty"`
 }
 
 // SetFirewallRestriction implements PUT /v1/firewall/restrictions/{port} -
 // creates or replaces (idempotent), so it serves both create and update.
-func (c *Client) SetFirewallRestriction(port int, sources []string, comment string, force bool) (*FirewallRestriction, error) {
+// lists names address lists or templates whose addresses also reach the port.
+func (c *Client) SetFirewallRestriction(port int, sources, lists []string, comment string, force bool) (*FirewallRestriction, error) {
 	var r FirewallRestriction
-	req := firewallRestrictionRequest{Sources: sources, Comment: comment, Force: force}
+	if sources == nil {
+		sources = []string{}
+	}
+	req := firewallRestrictionRequest{Sources: sources, Lists: lists, Comment: comment, Force: force}
 	if err := c.Put(fmt.Sprintf("/v1/firewall/restrictions/%d", port), req, &r); err != nil {
 		return nil, err
 	}
@@ -175,4 +187,64 @@ func (c *Client) UpdateFirewallSite(id string, p FirewallSitePatch) (*FirewallSi
 
 func (c *Client) DeleteFirewallSite(id string) error {
 	return c.Delete("/v1/firewall/sites/" + id)
+}
+
+// FirewallList mirrors apicp's firewall address list (GET /v1/firewall/lists/{id}):
+// a named set of addresses used by accept rules (list) and restrictions (lists).
+// Built-in templates come back the same way with Builtin set.
+type FirewallList struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Comment   string   `json:"comment,omitempty"`
+	Sources   []string `json:"sources"`
+	Template  string   `json:"template,omitempty"`
+	Builtin   bool     `json:"builtin,omitempty"`
+	Addresses []string `json:"addresses"`
+	Problem   string   `json:"problem,omitempty"`
+	UsedBy    []string `json:"used_by"`
+}
+
+type FirewallListInput struct {
+	Name    string   `json:"name"`
+	Sources []string `json:"sources"`
+	Comment string   `json:"comment,omitempty"`
+}
+
+type FirewallListPatch struct {
+	Name    *string   `json:"name,omitempty"`
+	Sources *[]string `json:"sources,omitempty"`
+	Comment *string   `json:"comment,omitempty"`
+}
+
+func (c *Client) CreateFirewallList(in FirewallListInput) (*FirewallList, error) {
+	var l FirewallList
+	if err := c.Post("/v1/firewall/lists", in, &l); err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+// GetFirewallList takes the list's id or name (or a template's id).
+func (c *Client) GetFirewallList(id string) (*FirewallList, error) {
+	var l FirewallList
+	if err := c.Get("/v1/firewall/lists/"+url.PathEscape(id), &l); err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+// UpdateFirewallList changes a list; apicp re-applies the firewall when a rule
+// or restriction uses it, and refuses a rename while it is in use.
+func (c *Client) UpdateFirewallList(id string, p FirewallListPatch) (*FirewallList, error) {
+	var l FirewallList
+	if err := c.Patch("/v1/firewall/lists/"+url.PathEscape(id), p, &l); err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+// DeleteFirewallList removes a list; apicp refuses (409) while a rule or
+// restriction uses it.
+func (c *Client) DeleteFirewallList(id string) error {
+	return c.Delete("/v1/firewall/lists/" + url.PathEscape(id))
 }

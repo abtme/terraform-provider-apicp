@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"net"
+	"net/netip"
 	"sort"
 	"strings"
 
@@ -86,6 +87,100 @@ func reconcileSources(ctx context.Context, known types.Set, api []string) (types
 	}
 	elems := make([]attr.Value, 0, len(api))
 	for _, s := range canonicalSourceSet(api) {
+		elems = append(elems, types.StringValue(s))
+	}
+	return types.SetValue(types.StringType, elems)
+}
+
+// reconcileNames returns the value to store for a set of names (a
+// restriction's lists): null stays null while apicp reports none, otherwise
+// apicp's names.
+func reconcileNames(ctx context.Context, known types.Set, api []string) (types.Set, diag.Diagnostics) {
+	if len(api) == 0 && (known.IsNull() || known.IsUnknown()) {
+		return types.SetNull(types.StringType), nil
+	}
+	if !known.IsNull() && !known.IsUnknown() {
+		have, diags := sourcesFromSet(ctx, known)
+		if diags.HasError() {
+			return known, diags
+		}
+		if sameNames(have, api) {
+			return known, nil
+		}
+	}
+	elems := make([]attr.Value, 0, len(api))
+	for _, s := range api {
+		elems = append(elems, types.StringValue(s))
+	}
+	return types.SetValue(types.StringType, elems)
+}
+
+func sameNames(a, b []string) bool {
+	set := map[string]bool{}
+	for _, x := range a {
+		set[x] = true
+	}
+	other := map[string]bool{}
+	for _, x := range b {
+		if !set[x] {
+			return false
+		}
+		other[x] = true
+	}
+	return len(set) == len(other)
+}
+
+// canonicalListSource mirrors how apicp stores an address list entry
+// (internal/firewall.NormalizeListSource): netip's canonical spelling, a bare
+// address as /32 or /128, an IPv4-mapped address as IPv4. Entries apicp
+// refuses are returned unchanged (apicp's error is the one to show).
+func canonicalListSource(s string) string {
+	s = strings.TrimSpace(s)
+	var p netip.Prefix
+	if strings.Contains(s, "/") {
+		var err error
+		if p, err = netip.ParsePrefix(s); err != nil {
+			return s
+		}
+	} else {
+		a, err := netip.ParseAddr(s)
+		if err != nil {
+			return s
+		}
+		p = netip.PrefixFrom(a, a.BitLen())
+	}
+	if a := p.Addr(); a.Is4In6() && p.Bits() >= 96 {
+		p = netip.PrefixFrom(a.Unmap(), p.Bits()-96)
+	}
+	return p.String()
+}
+
+// reconcileListSources is reconcileSources for an address list's entries,
+// compared the way apicp canonicalises them.
+func reconcileListSources(ctx context.Context, known types.Set, api []string) (types.Set, diag.Diagnostics) {
+	canon := func(xs []string) map[string]bool {
+		out := map[string]bool{}
+		for _, x := range xs {
+			out[canonicalListSource(x)] = true
+		}
+		return out
+	}
+	if !known.IsNull() && !known.IsUnknown() {
+		have, diags := sourcesFromSet(ctx, known)
+		if diags.HasError() {
+			return known, diags
+		}
+		a, b := canon(have), canon(api)
+		same := len(a) == len(b)
+		for k := range a {
+			same = same && b[k]
+		}
+		if same {
+			return known, nil
+		}
+	}
+	elems := make([]attr.Value, 0, len(api))
+	for _, s := range api {
 		elems = append(elems, types.StringValue(s))
 	}
 	return types.SetValue(types.StringType, elems)

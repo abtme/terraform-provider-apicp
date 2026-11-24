@@ -34,6 +34,7 @@ type FirewallRestrictionResourceModel struct {
 	ID      types.String `tfsdk:"id"`
 	Port    types.Int64  `tfsdk:"port"`
 	Sources types.Set    `tfsdk:"sources"`
+	Lists   types.Set    `tfsdk:"lists"`
 	Comment types.String `tfsdk:"comment"`
 	Force   types.Bool   `tfsdk:"force"`
 }
@@ -58,7 +59,12 @@ func (r *FirewallRestrictionResource) Schema(_ context.Context, _ resource.Schem
 			"sources": schema.SetAttribute{
 				Required:            true,
 				ElementType:         types.StringType,
-				MarkdownDescription: "CIDRs or bare IPs, any mix of IPv4 and IPv6, that may reach the port. At least one unless an `apicp_firewall_site` reaches the port (then `[]` means \"from my sites only\"; apicp refuses an empty list otherwise). `0.0.0.0/0` and `::/0` are refused (that is no restriction - destroy the resource instead).",
+				MarkdownDescription: "CIDRs or bare IPs, any mix of IPv4 and IPv6, that may reach the port. At least one unless `lists` is set or an `apicp_firewall_site` reaches the port (then `[]` means \"from my lists / sites only\"; apicp refuses an empty list otherwise). `0.0.0.0/0` and `::/0` are refused (that is no restriction - destroy the resource instead).",
+			},
+			"lists": schema.SetAttribute{
+				Optional:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Names of `apicp_firewall_list`s or built-in templates whose current addresses also reach the port, following each list when it changes. They count for the lockout guard. A list a restriction uses cannot be deleted.",
 			},
 			"comment": schema.StringAttribute{
 				Optional:            true,
@@ -98,6 +104,9 @@ func (r *FirewallRestrictionResource) apply(ctx context.Context, rs *client.Fire
 	}
 	sources, diags := reconcileSources(ctx, m.Sources, rs.Sources)
 	m.Sources = sources
+	lists, d := reconcileNames(ctx, m.Lists, rs.Lists)
+	m.Lists = lists
+	diags.Append(d...)
 	return diags
 }
 
@@ -106,7 +115,12 @@ func (r *FirewallRestrictionResource) put(ctx context.Context, m *FirewallRestri
 	if diags.HasError() {
 		return diags
 	}
-	rs, err := r.client.SetFirewallRestriction(int(m.Port.ValueInt64()), sources, m.Comment.ValueString(), m.Force.ValueBool())
+	lists, d := sourcesFromSet(ctx, m.Lists)
+	diags.Append(d...)
+	if diags.HasError() {
+		return diags
+	}
+	rs, err := r.client.SetFirewallRestriction(int(m.Port.ValueInt64()), sources, lists, m.Comment.ValueString(), m.Force.ValueBool())
 	if err != nil {
 		diags.AddError("Error setting the firewall restriction", err.Error())
 		return diags

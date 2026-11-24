@@ -124,6 +124,7 @@ func (p *ApicpProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewFirewallRuleResource,
 		NewFirewallRestrictionResource,
 		NewFirewallSiteResource,
+		NewFirewallListResource,
 		NewSMTPRelayResource,
 		NewMailRelayResource,
 		NewMailSettingsResource,

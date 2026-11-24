@@ -38,6 +38,7 @@ type FirewallRuleResourceModel struct {
 	ID       types.String `tfsdk:"id"`
 	Source   types.String `tfsdk:"source"`
 	Sources  types.Set    `tfsdk:"sources"`
+	List     types.String `tfsdk:"list"`
 	Port     types.String `tfsdk:"port"`
 	Protocol types.String `tfsdk:"protocol"`
 	Action   types.String `tfsdk:"action"`
@@ -59,7 +60,7 @@ func (r *FirewallRuleResource) Schema(_ context.Context, _ resource.SchemaReques
 			"source": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "CIDR (v4 or v6) or bare IP this rule applies to. Omit for \"anywhere\" (`0.0.0.0/0`/`::/0`). Changing this replaces the resource.",
+				MarkdownDescription: "CIDR (v4 or v6) or bare IP this rule applies to. Omit for \"anywhere\" (`0.0.0.0/0`/`::/0`), unless `list` is set. Changing this replaces the resource.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"sources": schema.SetAttribute{
@@ -68,6 +69,11 @@ func (r *FirewallRuleResource) Schema(_ context.Context, _ resource.SchemaReques
 				ElementType:         types.StringType,
 				MarkdownDescription: "Further CIDRs or bare IPs (any mix of IPv4 and IPv6) this rule applies to, in addition to `source`. One rule covers all of them. With neither `source` nor `sources` the rule applies to anywhere. A drop/reject rule for SSH/8080/8443 is only accepted when every source is specific. Changing this replaces the resource.",
 				PlanModifiers:       []planmodifier.Set{setplanmodifier.RequiresReplace(), setplanmodifier.UseStateForUnknown()},
+			},
+			"list": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Name of an `apicp_firewall_list` or a built-in template (such as `ovh-monitoring`) whose current addresses the rule also applies to, following the list when it changes. Accept rules only. With a list and no `source`/`sources` the rule applies to the list alone, never to anywhere: a list that stands for nothing lets nobody in. Changing this replaces the resource.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"port": schema.StringAttribute{
 				Optional:            true,
@@ -112,6 +118,11 @@ func (r *FirewallRuleResource) applyRule(ctx context.Context, rule *client.Firew
 	m.Source = types.StringValue(rule.Source)
 	sources, diags := reconcileSources(ctx, m.Sources, rule.Sources)
 	m.Sources = sources
+	if rule.List == "" {
+		m.List = types.StringNull()
+	} else {
+		m.List = types.StringValue(rule.List)
+	}
 	m.Port = types.StringValue(rule.Port)
 	m.Protocol = types.StringValue(rule.Protocol)
 	m.Action = types.StringValue(rule.Action)
@@ -132,7 +143,7 @@ func (r *FirewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 	rule, err := r.client.CreateFirewallRule(
-		plan.Source.ValueString(), sources, plan.Port.ValueString(),
+		plan.Source.ValueString(), sources, plan.List.ValueString(), plan.Port.ValueString(),
 		plan.Protocol.ValueString(), plan.Action.ValueString(), plan.Comment.ValueString(),
 	)
 	if err != nil {
