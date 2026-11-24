@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - with apicp's firewall address lists (branch firewall-lists, not released)
+
+- New resource `apicp_firewall_list`: a named set of addresses used by name from accept rules and restrictions;
+  changing it updates every user in place (`PATCH`), apicp refuses to delete or rename one in use.
+- `apicp_firewall_rule`: optional `list`, an address list or a built-in template such as `ovh-monitoring` (accept rules
+  only; a rule with only a list never applies to anywhere). Sent only when set.
+- `apicp_firewall_restriction`: optional `lists`; `sources = []` with lists means "from my lists only". Sent only when
+  set, so older apicp sees the same request as before (`sources` is now sent as `[]` rather than `null` when empty).
+
 ## v0.4.0 (2026-10-31) - with apicp 0.8.5 (mailbox tokens)
 
 - `apicp_account_token`: `mailbox_id` pins the token to one mailbox of the account (apicp 0.8.5 or later), with scopes `mailbox:read` and/or `mailbox:write`; it is sent only when set, so older apicp sees the same request as before.

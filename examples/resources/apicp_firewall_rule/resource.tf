@@ -29,3 +29,13 @@ resource "apicp_firewall_rule" "block_scanners" {
   action     = "drop"
   comment    = "scanner ranges"
 }
+
+# OVHcloud's dedicated-server monitoring, from the built-in template:
+# one rule instead of one per monitoring address.
+resource "apicp_firewall_rule" "ovh_monitoring" {
+  depends_on = [apicp_firewall.this]
+  list       = "ovh-monitoring"
+  protocol   = "all"
+  action     = "accept"
+  comment    = "OVHcloud monitoring"
+}

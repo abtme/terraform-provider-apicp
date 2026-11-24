@@ -25,3 +25,11 @@ resource "apicp_firewall_restriction" "pop3" {
   port       = 110
   sources    = ["198.51.100.0/24"]
 }
+
+# IMAP from an address list alone (see apicp_firewall_list).
+resource "apicp_firewall_restriction" "imap" {
+  depends_on = [apicp_firewall.this]
+  port       = 143
+  sources    = []
+  lists      = [apicp_firewall_list.office.name]
+}

@@ -62,6 +62,7 @@ syntax, is published on the
 | [`apicp_mail_relay`](docs/resources/mail_relay.md) | One of a node's named outbound relays (apicp v0.8.0): the default, or one that mail domains pick with `relay_id`. |
 | [`apicp_firewall`](docs/resources/firewall.md) | Node-wide firewall enable/disable. |
 | [`apicp_firewall_rule`](docs/resources/firewall_rule.md) | One firewall rule. |
+| [`apicp_firewall_list`](docs/resources/firewall_list.md) | A named firewall address list, used by rules (`list`) and restrictions (`lists`); built-in templates such as `ovh-monitoring` are used by name. |
 | [`apicp_account`](docs/resources/account.md) | A tenancy account (admin/reseller/user). |
 | [`apicp_package`](docs/resources/package.md) | A resource-limit template assignable to an account. |
 | [`apicp_totp`](docs/resources/totp.md) | TOTP-gated token issuance for a `apicp_account`. |
