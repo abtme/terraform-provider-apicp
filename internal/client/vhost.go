@@ -25,6 +25,8 @@ type Vhost struct {
 	NodeVersion string `json:"node_version,omitempty"`
 	AppEntry    string `json:"app_entry,omitempty"`
 	AppPort     int    `json:"app_port,omitempty"`
+	// ProxyPort is set on a proxy site: nginx passes every request to 127.0.0.1:ProxyPort (apicp 0.9+).
+	ProxyPort int `json:"proxy_port,omitempty"`
 }
 
 // VhostRuntime is what runs a vhost: nothing (static), a PHP version, or a Node.js app. apicp refuses PHP and Node
@@ -33,6 +35,7 @@ type VhostRuntime struct {
 	PHPVersion  string
 	NodeVersion string
 	AppEntry    string
+	ProxyPort   int
 }
 
 type vhostCreateRequest struct {
@@ -41,6 +44,7 @@ type vhostCreateRequest struct {
 	PHPVersion  string   `json:"php_version,omitempty"`
 	NodeVersion string   `json:"node_version,omitempty"`
 	AppEntry    string   `json:"app_entry,omitempty"`
+	ProxyPort   int      `json:"proxy_port,omitempty"`
 }
 
 type vhostPatchRequest struct {
@@ -48,12 +52,13 @@ type vhostPatchRequest struct {
 	PHPVersion  *string   `json:"php_version,omitempty"`
 	NodeVersion *string   `json:"node_version,omitempty"`
 	AppEntry    *string   `json:"app_entry,omitempty"`
+	ProxyPort   *int      `json:"proxy_port,omitempty"`
 	Aliases     *[]string `json:"aliases,omitempty"`
 }
 
 func (c *Client) CreateVhost(domain string, aliases []string, rt VhostRuntime) (*Vhost, error) {
 	var v Vhost
-	req := vhostCreateRequest{Domain: domain, Aliases: aliases, PHPVersion: rt.PHPVersion, NodeVersion: rt.NodeVersion, AppEntry: rt.AppEntry}
+	req := vhostCreateRequest{Domain: domain, Aliases: aliases, PHPVersion: rt.PHPVersion, NodeVersion: rt.NodeVersion, AppEntry: rt.AppEntry, ProxyPort: rt.ProxyPort}
 	if err := c.Post("/v1/vhosts", req, &v); err != nil {
 		return nil, err
 	}
@@ -73,8 +78,8 @@ func (c *Client) GetVhost(id string) (*Vhost, error) {
 // ID and every other attribute stay the same. Every field is always sent
 // (never nil) since the resource always has a resolved plan value for
 // each by the time Update runs; PATCH is idempotent, so re-sending an
-// unchanged value is a no-op. Sending all three runtime fields together is
-// also what lets a vhost move from PHP to Node (or back) in one request.
+// unchanged value is a no-op. Sending every runtime field together is
+// also what lets a vhost move from PHP to Node or a proxy (or back) in one request.
 //
 // aliases is always sent, and as a list even when empty, because the API replaces the whole list: an
 // empty list is how an alias is removed.
@@ -84,7 +89,7 @@ func (c *Client) PatchVhost(id, domain string, aliases []string, rt VhostRuntime
 		aliases = []string{}
 	}
 
-	req := vhostPatchRequest{Domain: &domain, PHPVersion: &rt.PHPVersion, NodeVersion: &rt.NodeVersion, AppEntry: &rt.AppEntry, Aliases: &aliases}
+	req := vhostPatchRequest{Domain: &domain, PHPVersion: &rt.PHPVersion, NodeVersion: &rt.NodeVersion, AppEntry: &rt.AppEntry, ProxyPort: &rt.ProxyPort, Aliases: &aliases}
 	if err := c.Patch("/v1/vhosts/"+id, req, &v); err != nil {
 		return nil, err
 	}

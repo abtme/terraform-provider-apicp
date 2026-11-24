@@ -36,10 +36,11 @@ type WebDomainResourceModel struct {
 	NodeVersion  types.String `tfsdk:"node_version"`
 	AppEntry     types.String `tfsdk:"app_entry"`
 	AppPort      types.Int64  `tfsdk:"app_port"`
+	ProxyPort    types.Int64  `tfsdk:"proxy_port"`
 }
 
 func (m *WebDomainResourceModel) runtime() client.VhostRuntime {
-	return client.VhostRuntime{PHPVersion: m.PHPVersion.ValueString(), NodeVersion: m.NodeVersion.ValueString(), AppEntry: m.AppEntry.ValueString()}
+	return client.VhostRuntime{PHPVersion: m.PHPVersion.ValueString(), NodeVersion: m.NodeVersion.ValueString(), AppEntry: m.AppEntry.ValueString(), ProxyPort: int(m.ProxyPort.ValueInt64())}
 }
 
 func (r *WebDomainResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -90,7 +91,7 @@ func (r *WebDomainResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"php_version": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "PHP-FPM version to serve this domain with: `5.6`, `7.2`, `7.4`, `8.0`, `8.1`, `8.2`, `8.3`, or `8.4`. Omit (or set to `\"\"`) for static content only, the default — apicp never installs a PHP version itself, a domain can only select one already provisioned on its node. Cannot be set together with `node_version`.",
+				MarkdownDescription: "PHP-FPM version to serve this domain with: `5.6`, `7.2`, `7.4`, `8.0`, `8.1`, `8.2`, `8.3`, `8.4`, `8.5`, or `8.6` (whichever the server offers). Omit (or set to `\"\"`) for static content only, the default — apicp never installs a PHP version itself, a domain can only select one already provisioned on its node. Cannot be set together with `node_version`.",
 			},
 			"node_version": schema.StringAttribute{
 				Optional: true,
@@ -107,6 +108,12 @@ func (r *WebDomainResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"app_port": schema.Int64Attribute{
 				Computed:            true,
 				MarkdownDescription: "The loopback port apicp gave the Node.js app (passed to it as `PORT`); 0 without `node_version`.",
+			},
+			"proxy_port": schema.Int64Attribute{
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Make this a proxy site (apicp 0.9+): nginx passes every request except the certificate check to a service the server's administrator runs on `127.0.0.1:proxy_port` " +
+					"(no upload size limit, streamed, 900 s timeouts). Admin tokens only. Cannot be set together with `php_version` or `node_version`. `0` (or removing it) makes it a plain site again.",
 			},
 		},
 	}
@@ -160,6 +167,7 @@ func (r *WebDomainResource) applyVhost(ctx context.Context, v *client.Vhost, m *
 	m.NodeVersion = types.StringValue(v.NodeVersion)
 	m.AppEntry = types.StringValue(v.AppEntry)
 	m.AppPort = types.Int64Value(int64(v.AppPort))
+	m.ProxyPort = types.Int64Value(int64(v.ProxyPort))
 
 	return diags
 }
